@@ -1,6 +1,14 @@
 {
     "name": "hovjacky/nosql",
     "description": "PHP Client for Elasticsearch (MongoDB and Cassandra are almost finished) - easy and unified queries",
+    "version": "1.0.0",
+    "authors": [
+        {
+            "name": "Ondrej Hovjacky",
+            "email": "hovjacky.ondrej@gmail.com",
+            "role": "Developer"
+        }
+    ],
     "require": {
         "php": "^7.0",
         "elasticsearch/elasticsearch": "6.0.1",

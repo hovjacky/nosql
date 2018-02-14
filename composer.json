@@ -1,0 +1,9 @@
+{
+    "name": "hovjacky/nosql",
+    "description": "PHP Client for Elasticsearch (MongoDB and Cassandra are almost finished) - easy and unified queries",
+    "require": {
+        "php": "^7.0",
+        "elasticsearch/elasticsearch": "6.0.1",
+        "tracy/tracy": "^2.4"
+    }
+}

@@ -1,7 +1,7 @@
 {
     "name": "hovjacky/nosql",
     "description": "PHP Client for Elasticsearch (MongoDB and Cassandra are almost finished) - easy and unified queries",
-    "licence": "MIT",
+    "license": "MIT",
     "keywords": ["nosql","elasticsearch"],
     "homepage": "https://github.com/hovjacky/nosql",
     "authors": [

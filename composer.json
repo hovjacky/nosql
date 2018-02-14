@@ -3,6 +3,8 @@
     "description": "PHP Client for Elasticsearch (MongoDB and Cassandra are almost finished) - easy and unified queries",
     "version": "1.0.0",
     "licence": "MIT",
+    "keywords": ["nosql","elasticsearch"],
+    "homepage": "https://github.com/hovjacky/nosql",
     "authors": [
         {
             "name": "Ondrej Hovjacky",

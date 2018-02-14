@@ -15,5 +15,8 @@
         "php": "^7.0",
         "elasticsearch/elasticsearch": "6.0.1",
         "tracy/tracy": "^2.4"
+    },
+    "autoload": {
+        "psr-4": { "Hovjacky\\": "src" }
     }
 }

@@ -17,6 +17,6 @@
         "tracy/tracy": "^2.4"
     },
     "autoload": {
-        "psr-4": { "Hovjacky\\": "src" }
+        "psr-4": { "Hovjacky\\NoSQL\\": "src" }
     }
 }

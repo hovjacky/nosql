@@ -2,6 +2,8 @@
 
 namespace Hovjacky\NoSQL;
 
+use Tracy\Debugger;
+
 abstract class DBWithBooleanParsing extends DB
 {
     /**
@@ -24,6 +26,9 @@ abstract class DBWithBooleanParsing extends DB
             {
                 if (strpos($condition, '?') === false)
                 {
+                    Debugger::log("Too few questionmarks. Condition and values:", Debugger::ERROR);
+                    Debugger::log($condition, Debugger::ERROR);
+                    Debugger::log($values, Debugger::ERROR);
                     throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
                 }
                 // Hodnotou může být i pole hodnot, převedeme jej do textové podoby
@@ -47,6 +52,9 @@ abstract class DBWithBooleanParsing extends DB
         }
         if (strpos($condition, '?') !== false)
         {
+            Debugger::log("Too many questionmarks. Condition and values:", Debugger::ERROR);
+            Debugger::log($condition, Debugger::ERROR);
+            Debugger::log($values, Debugger::ERROR);
             throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
         }
         return $condition;

@@ -266,17 +266,17 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
             'body' => []
         ];
 
-        if (!empty($params['fields']))
+        if (!empty($params[DB::PARAM_FIELDS]))
         {
-            $paramsES['_source_include'] = implode(',', $params['fields']);
+            $paramsES['_source_include'] = implode(',', $params[DB::PARAM_FIELDS]);
         }
-        if (!empty($params['where']))
+        if (!empty($params[DB::PARAM_WHERE]))
         {
             $conditions = [];
-            foreach ($params['where'] as $condition => $values)
+            foreach ($params[DB::PARAM_WHERE] as $condition => $values)
             {
                 $values = $this->convertToDBDataTypes($values);
-                if (count($params['where']) === 1)
+                if (count($params[DB::PARAM_WHERE]) === 1)
                 {
                     $conditions = $this->parseBooleanQuery($this->putValuesIntoQuery($condition, $values));
                 }
@@ -287,40 +287,40 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
             }
             $paramsES['body']['query'] = $conditions;
         }
-        if (!empty($params['limit']))
+        if (!empty($params[DB::PARAM_LIMIT]))
         {
-            if (empty($params['groupBy']))
+            if (empty($params[DB::PARAM_GROUP_BY]))
             {
-                $paramsES['body']['size'] = $params['limit'];
-                if (!empty($params['offset']))
+                $paramsES['body']['size'] = $params[DB::PARAM_LIMIT];
+                if (!empty($params[DB::PARAM_OFFSET]))
                 {
-                    $paramsES['body']['from'] = $params['offset'];
+                    $paramsES['body']['from'] = $params[DB::PARAM_OFFSET];
                 }
             }
             else
             {
-                $limit = $params['limit'];
-                if (!empty($params['offset']))
+                $limit = $params[DB::PARAM_LIMIT];
+                if (!empty($params[DB::PARAM_OFFSET]))
                 {
-                    $limit += $params['offset'];
+                    $limit += $params[DB::PARAM_OFFSET];
                 }
                 $paramsES['body']['aggs']['group_by']['terms']['size'] = $limit;
             }
         }
-        elseif (!empty($params['groupBy']))
+        elseif (!empty($params[DB::PARAM_GROUP_BY]))
         {
             // Aggregation - nechceme normální výsledky
             $paramsES['body']['size'] = 0;
             $paramsES['body']['aggs']['group_by']['terms']['size'] = self::DEFAULT_LIMIT;
         }
-        elseif (empty($params['count']))
+        elseif (empty($params[DB::PARAM_COUNT]))
         {
             // Default limit
             $paramsES['body']['size'] = self::DEFAULT_LIMIT;
         }
-        if (!empty($params['orderBy']) && empty($params['groupBy']) && empty($params['aggregation']))
+        if (!empty($params[DB::PARAM_ORDER_BY]) && empty($params[DB::PARAM_GROUP_BY]) && empty($params[DB::PARAM_AGGREGATION]))
         {
-            foreach ($params['orderBy'] as $column)
+            foreach ($params[DB::PARAM_ORDER_BY] as $column)
             {
                 $desc = strpos($column, ' desc');
                 if ($desc !== false)
@@ -331,43 +331,43 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
             }
             $paramsES['body']['sort'][] = "_score";
         }
-        if (!empty($params['groupBy']))
+        if (!empty($params[DB::PARAM_GROUP_BY]))
         {
             // Je možné v groupBy uvést "script" a definovat skript v groupByScript
-            if ($params['groupBy'] !== 'script' || empty($params['groupByScript']))
+            if ($params[DB::PARAM_GROUP_BY] !== 'script' || empty($params[DB::PARAM_GROUP_BY_SCRIPT]))
             {
-                $paramsES['body']['aggs']['group_by']['terms']['field'] = $params['groupBy'];
+                $paramsES['body']['aggs']['group_by']['terms']['field'] = $params[DB::PARAM_GROUP_BY];
             }
             else
             {
-                $paramsES['body']['aggs']['group_by']['terms']['script'] = $params['groupByScript'];
+                $paramsES['body']['aggs']['group_by']['terms']['script'] = $params[DB::PARAM_GROUP_BY_SCRIPT];
             }
-            if (!empty($params['orderBy']))
+            if (!empty($params[DB::PARAM_ORDER_BY]))
             {
                 $paramsES['body']['aggs']['group_by']['aggs']['results']['top_hits']['size'] = 1;
-                if (!empty($params['fields']))
+                if (!empty($params[DB::PARAM_FIELDS]))
                 {
                     // Chceme vrátit jen požadovaná pole
-                    $paramsES['body']['aggs']['group_by']['aggs']['results']['top_hits']['_source']['includes'] = $params['fields'];
+                    $paramsES['body']['aggs']['group_by']['aggs']['results']['top_hits']['_source']['includes'] = $params[DB::PARAM_FIELDS];
                 }
-                foreach ($params['orderBy'] as $column)
+                foreach ($params[DB::PARAM_ORDER_BY] as $column)
                 {
                     $desc = strpos($column, ' desc');
                     if ($desc !== false)
                     {
                         $column = substr($column, 0, $desc);
                     }
-                    $paramsES['body']['aggs']['group_by']['terms']['order'][] = [($column === $params['groupBy'] ? '_key' : ($column === 'count' ? '_count' : $column)) => ($desc !== false ? 'desc' : 'asc')];
+                    $paramsES['body']['aggs']['group_by']['terms']['order'][] = [($column === $params[DB::PARAM_GROUP_BY] ? '_key' : ($column === DB::PARAM_COUNT ? '_count' : $column)) => ($desc !== false ? 'desc' : 'asc')];
                     // Musí se přidat agregace podle sloupce, podle kterého chceme řadit
-                    if ($column !== $params['groupBy'] && $column !== 'count')
+                    if ($column !== $params[DB::PARAM_GROUP_BY] && $column !== DB::PARAM_COUNT)
                     {
                         $paramsES['body']['aggs']['group_by']['aggs'][$column][$desc !== false ? 'max' : 'min']['field'] = $column;
                     }
                 }
                 // Vnitřní řazení v GROUP BY buckets (jaký záznam ze skupiny chceme)
-                if (!empty($params['groupInternalOrderBy']))
+                if (!empty($params[DB::PARAM_GROUP_INTERNAL_ORDER_BY]))
                 {
-                    foreach ($params['groupInternalOrderBy'] as $column)
+                    foreach ($params[DB::PARAM_GROUP_INTERNAL_ORDER_BY] as $column)
                     {
                         $desc = strpos($column, ' desc');
                         if ($desc !== false)
@@ -379,11 +379,11 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
                 }
             }
         }
-        if (!empty($params['aggregation']))
+        if (!empty($params[DB::PARAM_AGGREGATION]))
         {
-            foreach ($params['aggregation'] as $agg => $columns)
+            foreach ($params[DB::PARAM_AGGREGATION] as $agg => $columns)
             {
-                if (empty($params['groupBy']))
+                if (empty($params[DB::PARAM_GROUP_BY]))
                 {
                     foreach ($columns as $column)
                     {
@@ -399,12 +399,12 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
                 }
             }
         }
-        if (!empty($params['count']) && empty($params['groupBy']))
+        if (!empty($params[DB::PARAM_COUNT]) && empty($params[DB::PARAM_GROUP_BY]))
         {
             try
             {
                 $results = $this->client->count($paramsES);
-                return $results['count'];
+                return $results[DB::PARAM_COUNT];
             }
             catch(\Exception $e)
             {
@@ -416,11 +416,11 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
         {
             $results = $this->client->search($paramsES);
             $finalResults = [];
-            if (!empty($params['groupBy']))
+            if (!empty($params[DB::PARAM_GROUP_BY]))
             {
                 $buckets = $results['aggregations']['group_by']['buckets'];
                 // Pokud zjišťujeme pouze počet záznamů, zajímá nás počet buckets
-                if (!empty($params['count']))
+                if (!empty($params[DB::PARAM_COUNT]))
                 {
                     $count = count($buckets);
                     // Pokud nebylo nic nalezeno, zjistíme, jestli existuje požadovaný typ
@@ -443,11 +443,11 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
                     }
                     else
                     {
-                        $result = [$params['groupBy'] => $bucket['key'], 'count' => $bucket['doc_count']];
+                        $result = [$params[DB::PARAM_GROUP_BY] => $bucket['key'], 'count' => $bucket['doc_count']];
                     }
-                    if (!empty($params['aggregation']))
+                    if (!empty($params[DB::PARAM_AGGREGATION]))
                     {
-                        foreach ($params['aggregation'] as $agg => $columns)
+                        foreach ($params[DB::PARAM_AGGREGATION] as $agg => $columns)
                         {
                             foreach ($columns as $column)
                             {
@@ -457,15 +457,15 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
                     }
                     $finalResults[] = $this->convertFromDBDataTypes($result);
                 }
-                if (!empty($params['offset']))
+                if (!empty($params[DB::PARAM_OFFSET]))
                 {
-                    $finalResults = array_slice($finalResults, $params['offset']);
+                    $finalResults = array_slice($finalResults, $params[DB::PARAM_OFFSET]);
                 }
             }
-            elseif (!empty($params['aggregation']))
+            elseif (!empty($params[DB::PARAM_AGGREGATION]))
             {
                 $result = [];
-                foreach ($params['aggregation'] as $agg => $columns)
+                foreach ($params[DB::PARAM_AGGREGATION] as $agg => $columns)
                 {
                     foreach ($columns as $column)
                     {
@@ -479,7 +479,7 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
                 foreach ($results['hits']['hits'] as $result)
                 {
                     $row = $result['_source'];
-                    if (!empty($params['fields']) && in_array('id', $params['fields']))
+                    if (!empty($params[DB::PARAM_FIELDS]) && in_array('id', $params[DB::PARAM_FIELDS]))
                     {
                         $row = array_merge(['id' => $result['_id']], $row);
                     }
@@ -649,7 +649,7 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
         if (($pos = strpos($expr, '=')) !== false)
         {
             $val = trim(substr($expr, $pos + 1));
-            // Je možné zde dát pole, zadané takto ['where']['sloupec = ?'] = [1, 2, 3];
+            // Je možné zde dát pole, zadané takto [DB::PARAM_WHERE]['sloupec = ?'] = [1, 2, 3];
             if (($start = strpos($val, '[')) !== false && ($end = strpos($val, ']')) !== false && $start < $end)
             {
                 $val = explode(',', substr($val, $start + 1, $end - 1));

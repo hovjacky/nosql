@@ -18,6 +18,19 @@ abstract class DB implements DBInterface
     const ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS = 'Rozdílný počet `?` a hodnot v dotazu.';
     const ERROR_BOOLEAN_WRONG_NUMBER_OF_PARENTHESES = 'Špatný počet závorek v dotazu.';
 
+    const PARAM_FIELDS = 'fields';
+    const PARAM_LIMIT = 'limit';
+    const PARAM_OFFSET = 'offset';
+    const PARAM_COUNT = 'count';
+    const PARAM_ORDER_BY = 'orderBy';
+    const PARAM_GROUP_BY = 'groupBy';
+    const PARAM_GROUP_BY_SCRIPT = 'groupByScript';
+    const PARAM_GROUP_INTERNAL_ORDER_BY = 'groupInternalOrderBy';
+    const PARAM_AGGREGATION = 'aggregation';
+    const PARAM_WHERE = 'where';
+
+    const ORDER_BY_DESC_POSTFIX = ' desc';
+
     /**
      * @var String název databáze/indexu
      */
@@ -133,20 +146,20 @@ abstract class DB implements DBInterface
      */
     protected function checkParams($params)
     {
-        if (!empty($params['fields']))
+        if (!empty($params[self::PARAM_FIELDS]))
         {
-            if (!is_array($params['fields']))
+            if (!is_array($params[self::PARAM_FIELDS]))
             {
                 throw new DBException(self::ERROR_FIELDS);
             }
         }
-        if (!empty($params['where']))
+        if (!empty($params[self::PARAM_WHERE]))
         {
-            if (!is_array($params['where']))
+            if (!is_array($params[self::PARAM_WHERE]))
             {
                 throw new DBException(self::ERROR_WHERE);
             }
-            foreach ($params['where'] as $condition => $values)
+            foreach ($params[self::PARAM_WHERE] as $condition => $values)
             {
                 if (is_numeric($condition))
                 {
@@ -154,45 +167,45 @@ abstract class DB implements DBInterface
                 }
                 if (isset($values) && !is_array($values))
                 {
-                    $params['where'][$condition] = [$values];
+                    $params[self::PARAM_WHERE][$condition] = [$values];
                 }
             }
         }
-        if (!empty($params['orderBy']))
+        if (!empty($params[self::PARAM_ORDER_BY]))
         {
-            if (!is_array($params['orderBy']))
+            if (!is_array($params[self::PARAM_ORDER_BY]))
             {
-                $params['orderBy'] = [$params['orderBy']];
+                $params[self::PARAM_ORDER_BY] = [$params[self::PARAM_ORDER_BY]];
             }
             // Při získávání počtu záznamů nefunguje orderBy (ani jej nepotřebujeme)
-            if (!empty($params['count']))
+            if (!empty($params[self::PARAM_COUNT]))
             {
-                unset($params['orderBy']);
+                unset($params[self::PARAM_ORDER_BY]);
             }
         }
-        if (!empty($params['groupInternalOrderBy']))
+        if (!empty($params[self::PARAM_GROUP_INTERNAL_ORDER_BY]))
         {
-            if (!is_array($params['groupInternalOrderBy']))
+            if (!is_array($params[self::PARAM_GROUP_INTERNAL_ORDER_BY]))
             {
-                $params['groupInternalOrderBy'] = [$params['groupInternalOrderBy']];
+                $params[self::PARAM_GROUP_INTERNAL_ORDER_BY] = [$params[self::PARAM_GROUP_INTERNAL_ORDER_BY]];
             }
             // Při získávání počtu záznamů nepotřebujeme groupInternalOrderBy
-            if (!empty($params['count']))
+            if (!empty($params[self::PARAM_COUNT]))
             {
-                unset($params['groupInternalOrderBy']);
+                unset($params[self::PARAM_GROUP_INTERNAL_ORDER_BY]);
             }
         }
-        if (!empty($params['aggregation']))
+        if (!empty($params[self::PARAM_AGGREGATION]))
         {
-            if (!is_array($params['aggregation']))
+            if (!is_array($params[self::PARAM_AGGREGATION]))
             {
                 throw new DBException(self::ERROR_AGGREGATION);
             }
-            foreach ($params['aggregation'] as $agg => $columns)
+            foreach ($params[self::PARAM_AGGREGATION] as $agg => $columns)
             {
                 if (!is_array($columns))
                 {
-                    $params['aggregation'][$agg] = [$columns];
+                    $params[self::PARAM_AGGREGATION][$agg] = [$columns];
                 }
             }
         }

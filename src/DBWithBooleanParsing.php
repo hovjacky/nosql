@@ -49,7 +49,7 @@ abstract class DBWithBooleanParsing extends DB
                 }
 
                 // Závorky nejsou v hodnotách povoleny, odstraníme je...
-                $replace = preg_replace("[()#%*><=!?]", "", $replace);
+                $replace = preg_replace("[^\p{L}\p{N}\-_@., ]", "", $replace);
 
                 $condition = preg_replace($from, $replace, $condition, 1);
             }

@@ -47,6 +47,11 @@ abstract class DBWithBooleanParsing extends DB
                     $replace = '#' . $p++ . '#';
                     $placeholders[$replace] = $value;
                 }
+
+                // Závorky nejsou v hodnotách povoleny, odstraníme je...
+                $replace = str_replace("(", "", $replace);
+                $replace = str_replace(")", "", $replace);
+
                 $condition = preg_replace($from, $replace, $condition, 1);
             }
         }

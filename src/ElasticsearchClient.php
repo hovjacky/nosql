@@ -19,8 +19,14 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
 
     public function __construct($params)
     {
-        $connectionParams[] = $params['host'] . (!empty($params['port']) ? ':' . $params['port'] : '');
-        $this->client = ClientBuilder::create()->setHosts($connectionParams)->build();
+        $withAuth = !empty($params['username']) && !empty($params['password']);
+        $connectionParams[] = ($withAuth ? "https://{$params['username']}:{$params['password']}@" : '') . $params['host'] . (!empty($params['port']) ? ':' . $params['port'] : '');
+        $clientBuilder = ClientBuilder::create()->setHosts($connectionParams);
+        if (!empty($params['disableSslVerification']))
+        {
+            $clientBuilder->setSSLVerification(FALSE);
+        }
+        $this->client = $clientBuilder->build();
         $this->dbName = $params['index'];
     }
 

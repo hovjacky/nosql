@@ -690,6 +690,19 @@ class ElasticsearchClient extends DBWithBooleanParsing implements DBInterface
             $result['exists']['field'] = trim(mb_substr($expr, 0, $pos));
             return $result;
         }
+        if (($pos = strpos($expr, ' CROSS FIELDS ')) !== false)
+        {
+            $fields = trim(mb_substr($expr, 0, $pos));
+            $val = trim(substr($expr, $pos + 14));
+
+            $result['multi_match'] = [
+                'query' => $val,
+                'type' => 'cross_fields',
+                'operator' => 'and',
+                "fields" => explode(",", $fields)
+            ];
+            return $result;
+        }
         return $expr;
     }
 

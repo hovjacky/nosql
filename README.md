@@ -52,7 +52,8 @@ lowercase desc - `['id desc', 'name']` (`ORDER BY id DESC, name`)
 and values are names of fields the aggregations should apply to, e.g.
 `['min' => ['id', 'age'], 'avg' => ['age']]` (`SELECT MIN(id), MIN(age), AVG(age) FROM`)
 + where - an associative array, keys are conditions with placeholders (?) and values are values.
-Conditions accept operators =, !=, >, <, >=, <=, LIKE, IS NULL, IS NOT NULL.
+Conditions accept operators =, !=, >, <, >=, <=, LIKE, IS NULL, IS NOT NULL, CROSS FIELDS.
     + LIKE - the value should contain % (the same as in SQL)
     + = - the value can be an array, e.g. `['id = ?' => [1, 3, 7]]` (`id IN (1, 3, 7)`)
     + IS NULL, IS NOT NULL - Elasticsearch only
+    + CROSS FIELDS - searching string in multiple fields, e.g. name `John Smith` in fields `firstname` and `surname`. Syntax is `"firstname,surname CROSS FIELDS ?" => "John Smith"`

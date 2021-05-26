@@ -1,0 +1,12 @@
+version: '2.1'
+services:
+  nosql.app:
+    container_name: 'nosql.app'
+    image: 'sidewave/php:8.0-apache'
+    ports:
+      - '80:80'
+      - '443:443'
+      - '8025:8025'
+      - '9001:9001'
+    volumes:
+      - ./../:/var/www/html

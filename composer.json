@@ -12,11 +12,18 @@
         }
     ],
     "require": {
-        "php": "^7.0",
-        "elasticsearch/elasticsearch": "6.1.0",
-        "tracy/tracy": "^2.4"
+        "php": ">=7.0 <=9",
+        "elasticsearch/elasticsearch": "7.13.0",
+        "tracy/tracy": "^2.8"
     },
     "autoload": {
         "psr-4": { "Hovjacky\\NoSQL\\": "src" }
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^0.12.88"
+    },
+    "scripts": {
+        "phpstan": "vendor/bin/phpstan analyse -c phpstan.neon",
+        "phpstan-local": "php-df vendor/bin/phpstan analyse -c phpstan.neon --memory-limit=99999999999"
     }
 }

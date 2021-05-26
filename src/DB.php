@@ -38,9 +38,9 @@ abstract class DB implements DBInterface
 
     /**
      * DB constructor.
-     * @param array $params
+     * @param array<mixed> $params
      */
-    public abstract function __construct($params);
+    public abstract function __construct(array $params);
 
     /**
      * Vrátí klienta pro možnost vytvoření jakéhokoliv dotazu vázaného přímo na danou databázi.
@@ -54,7 +54,7 @@ abstract class DB implements DBInterface
      * Pokud již existuje, tak ho upraví.
      *
      * @param string $table
-     * @param array $data
+     * @param array<mixed> $data
      * @return mixed true nebo false podle úspěchu
      * @throws \Exception
      */

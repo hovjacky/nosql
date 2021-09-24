@@ -4,13 +4,16 @@ namespace Hovjacky\NoSQL;
 
 use Tracy\Debugger;
 
+/**
+ * Class DBWithBooleanParsing
+ * @package Hovjacky\NoSQL
+ */
 abstract class DBWithBooleanParsing extends DB
 {
     /**
      * Vloží hodnoty do dotazu místo `?`.
-     *
      * @param string $condition
-     * @param $values
+     * @param array|null $values
      * @param boolean $putPlaceholdersForDate Mají se místo datumu vložit placeholdery? Nutné např. pro MongoDB.
      * @param array $placeholders Pole pro uložení placeholderů a k nim patřícím datumům.
      * @return string
@@ -19,9 +22,11 @@ abstract class DBWithBooleanParsing extends DB
     protected function putValuesIntoQuery($condition, $values, $putPlaceholdersForDate = false, &$placeholders = [])
     {
         $p = count($placeholders);
+
         if (isset($values))
         {
             $from = '/' . preg_quote('?', '/') . '/';
+
             foreach ($values as $value)
             {
                 if (strpos($condition, '?') === false)
@@ -31,6 +36,7 @@ abstract class DBWithBooleanParsing extends DB
                     Debugger::log($values, Debugger::ERROR);
                     throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
                 }
+
                 // Hodnotou může být i pole hodnot, převedeme jej do textové podoby
                 if (is_array($value))
                 {
@@ -51,22 +57,25 @@ abstract class DBWithBooleanParsing extends DB
                 // Závorky nejsou v hodnotách povoleny, odstraníme je...
                 $replace = preg_replace("/[^\p{L}\p{N}\-_@., :\+\[\]%]/u", "", $replace);
 
-                $condition = preg_replace($from, $replace, $condition, 1);
+                $condition = (string) preg_replace($from, $replace, $condition, 1);
             }
         }
+
         if (strpos($condition, '?') !== false)
         {
             Debugger::log("Too many questionmarks. Condition and values:", Debugger::ERROR);
             Debugger::log($condition, Debugger::ERROR);
             Debugger::log($values, Debugger::ERROR);
+
             throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
         }
+
         return $condition;
     }
 
+
     /**
      * Rozparsuje booleovský dotaz pro Elasticsearch
-     *
      * @param string $query
      * @return array
      * @throws DBException
@@ -74,6 +83,7 @@ abstract class DBWithBooleanParsing extends DB
     protected function parseBooleanQuery($query)
     {
         $parNumber = substr_count($query, '(');
+
         if ($parNumber !== substr_count($query, ')'))
         {
             throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PARENTHESES);
@@ -82,20 +92,26 @@ abstract class DBWithBooleanParsing extends DB
         if ($parNumber > 0)
         {
             $elements = [];
+
             $pos = strpos($query, '(');
+
             while ($pos !== false)
             {
                 // Něco je před závorkou
                 if ($pos > 0)
                 {
                     $temp = $this->trimAndOr(trim(substr($query, 0, $pos)));
+
+                    /** @noinspection SlowArrayOperationsInLoopInspection */
                     $elements = array_merge($elements, $temp);
                 }
+
                 $query = trim(substr($query, $pos + 1));
 
                 // Zjistíme další pozici otevírací závorky a pozici uzavírací závorky
                 $posOpen = strpos($query, '(');
                 $posClose = strpos($query, ')');
+
                 // Pozice hledané uzavírací závorky
                 $queryPosClose = $posClose;
 
@@ -115,12 +131,15 @@ abstract class DBWithBooleanParsing extends DB
                     else
                     {
                         $subQuery = (substr($subQuery, $posClose + 1));
+
                         if ($posOpen !== false)
                         {
                             $posOpen -= $posClose + 1;
                         }
+
                         $posClose = strpos($subQuery, ')');
                         $openCount--;
+
                         if ($openCount > 0)
                         {
                             $queryPosClose += $posClose + 1;
@@ -128,7 +147,9 @@ abstract class DBWithBooleanParsing extends DB
                     }
                 }
 
-                $temp = $this->trimAndOr(trim(substr($query, 0, $queryPosClose)));
+                $temp = $this->trimAndOr(trim(substr($query, 0, (int) $queryPosClose)));
+
+                /** @noinspection SlowArrayOperationsInLoopInspection */
                 $elements = array_merge($elements, $temp);
 
                 // Pokud je to vše skončíme
@@ -140,19 +161,23 @@ abstract class DBWithBooleanParsing extends DB
                 // Jinak najdeme další pozici otevírací závorky nebo jen zbytek zpracujeme, pokud už další závorka není
                 $query = trim($subQuery);
                 $pos = strpos($query, '(');
+
                 if ($pos === false && mb_strlen($query) > 0)
                 {
                     $temp = $this->trimAndOr(trim($query));
+
+                    /** @noinspection SlowArrayOperationsInLoopInspection */
                     $elements = array_merge($elements, $temp);
                 }
             }
 
             $result = [];
             $iOld = 0;
-            for ($i = 1; $i < count($elements); $i += 2)
+
+            for ($i = 1, $iMax = count($elements); $i < $iMax; $i += 2)
             {
                 // Rozdělíme podle OR
-                if ($elements[$i] == 'OR')
+                if ($elements[$i] === 'OR')
                 {
                     $this->addOrClause($result, $this->parseAndArrayQuery($elements, $iOld, $i));
                 }
@@ -167,24 +192,23 @@ abstract class DBWithBooleanParsing extends DB
             {
                 $this->addOrClause($result, $this->parseAndArrayQuery($elements, $iOld, count($elements)));
             }
+
             return $result;
         }
-        else
-        {
-            return $this->parseAndOrQuery($query);
-        }
 
+        return $this->parseAndOrQuery($query);
     }
 
+
     /**
-     * Rozdělí dotaz na 2 části, pokud začíná nebo končí AND/OR
-     *
+     * Rozdělí dotaz na 2 části, pokud začíná nebo končí AND/OR.
      * @param string $query
      * @return array
      */
     protected function trimAndOr($query)
     {
         $result = [];
+
         if (strpos($query, 'AND') === 0 || strpos($query, 'OR') === 0)
         {
             $first = trim(substr($query, 0, 3));
@@ -199,20 +223,23 @@ abstract class DBWithBooleanParsing extends DB
         {
             $first = $query;
         }
+
         if (!empty($first))
         {
             $result[] = $first;
         }
+
         if (!empty($second))
         {
             $result[] = $second;
         }
+
         return $result;
     }
 
+
     /**
-     * 'Rozparsuje' pole, každý sudý prvek je AND, každý lichý je dál parsován
-     *
+     * 'Rozparsuje' pole, každý sudý prvek je AND, každý lichý je dál parsován.
      * @param array $elements
      * @param int $start
      * @param int $end
@@ -222,6 +249,7 @@ abstract class DBWithBooleanParsing extends DB
     protected function parseAndArrayQuery($elements, &$start, $end)
     {
         $andResult = [];
+
         if ($start + 2 >= $end)
         {
             $andResult = $this->parseBooleanQuery($elements[$start]);
@@ -233,38 +261,42 @@ abstract class DBWithBooleanParsing extends DB
                 $this->addAndClause($andResult, $this->parseBooleanQuery($elements[$j]));
             }
         }
+
         $start = $end + 1;
+
         return $andResult;
     }
 
+
     /**
-     * Přidá $clause do $result jako and
-     *
-     * @param $result
-     * @param $clause
+     * Přidá $clause do $result jako and.
+     * @param array $result
+     * @param array $clause
+     * @return void
      */
     protected abstract function addAndClause(&$result, $clause);
 
+
     /**
-     * Přidá $clause do $result jako or
-     *
-     * @param $result
-     * @param $clause
+     * Přidá $clause do $result jako or.
+     * @param array $result
+     * @param array $clause
+     * @return void
      */
     protected abstract function addOrClause(&$result, $clause);
 
+
     /**
-     * Rozparsuje booleovský výraz bez závorek (jen AND a OR)
-     *
-     * @param $query
+     * Rozparsuje booleovský výraz bez závorek (jen AND a OR).
+     * @param string $query
      * @return array
      */
     protected abstract function parseAndOrQuery($query);
 
+
     /**
-     * Rozparsuje výraz proměnná >,<,=,>=,<=,!= hodnota
-     *
-     * @param $expr
+     * Rozparsuje výraz proměnná >,<,=,>=,<=,!= hodnota.
+     * @param string $expr
      * @return mixed
      */
     protected abstract function parseExpression($expr);

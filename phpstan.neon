@@ -1,5 +1,5 @@
 parameters:
-  # nastaveni urovni striktnosti kontroly kodu, 8 je v soucasne chvili nejvice
-  level: 8
+  level: max
+  checkMissingIterableValueType: false
   paths:
       - src

@@ -2,8 +2,13 @@
 
 namespace Hovjacky\NoSQL;
 
+use Exception;
 
-class DBException extends \Exception
+/**
+ * Class DBException
+ * @package Hovjacky\NoSQL
+ */
+class DBException extends Exception
 {
 
 }

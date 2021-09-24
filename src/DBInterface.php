@@ -20,73 +20,66 @@ interface DBInterface
 	/**
 	 * Vloží záznam do tabulky.
 	 * Pokud již existuje, tak ho upraví.
-	 * @param string $table
 	 * @param array $data
 	 * @return mixed true nebo false podle úspěchu
 	 * @throws Throwable
 	 */
-	public function insert($table, $data);
+	public function insert($data);
 
 
 	/**
 	 * Hromadně vloží data do tabulky.
 	 * Pokud již záznam existuje, tak ho upraví.
-	 * @param string $table
 	 * @param array $data
 	 * @return mixed true nebo false podle úspěchu
 	 * @throws Throwable
 	 */
-	public function bulkInsert($table, $data);
+	public function bulkInsert($data);
 
 
 	/**
 	 * Přečte záznam z tabulky.
-	 * @param string $table
 	 * @param int $id
 	 * @return array|false Nalezený záznam nebo false
 	 * @throws Throwable
 	 */
-	public function get($table, $id);
+	public function get($id);
 
 
 	/**
 	 * Upraví záznam v tabulce.
-	 * @param string $table
 	 * @param int $id
 	 * @param array $data
 	 * @return mixed true pokud byl záznam upraven, false pokud nebyl upraven
 	 * @throws Throwable
 	 */
-	public function update($table, $id, $data);
+	public function update($id, $data);
 
 
 	/**
 	 * Smaže záznam z tabulky.
-	 * @param string $table
 	 * @param int $id
 	 * @return mixed true pokud byl záznam smazán
 	 * @throws Throwable
 	 */
-	public function delete($table, $id);
+	public function delete($id);
 
 
 	/**
 	 * Smaže všechny záznamy z tabulky.
-	 * @param string $table
 	 * @return bool
 	 * @throws Throwable
 	 */
-	public function deleteAll($table);
+	public function deleteAll();
 
 
 	/**
 	 * Vrátí záznamy odpovídající daným kritériím
-	 * @param string $table
 	 * @param array $params
 	 * @return int|array
 	 * @throws Throwable
 	 */
-	public function findBy($table, $params);
+	public function findBy($params);
 
 
 	/**

@@ -59,15 +59,13 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Vložení nových informací do elasticsearch.
-     * @param string $table
      * @param array $data
      * @return bool
      */
-    public function insert($table, $data)
+    public function insert($data)
     {
         $params = [
             'index' => $this->dbName,
-            'type' => $table,
             'body' => $this->convertToDBDataTypes($data)
         ];
 
@@ -91,12 +89,11 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Hromadné vložení informací do elasticsearch.
-     * @param string $table
      * @param array $data
      * @return bool|mixed
      * @throws DBException
      */
-    public function bulkInsert($table, $data)
+    public function bulkInsert($data)
     {
         if (empty($data) || !is_array($data))
         {
@@ -106,7 +103,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
         $generalParams = [
             'index' => [
                 '_index' => $this->dbName,
-                '_type' => $table
             ]
         ];
 
@@ -145,17 +141,15 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Načtení informací o položce z elasticsearch.
-     * @param string $table
      * @param int $id
      * @return array|false
      * @throws DBException
      * @throws Throwable
      */
-    public function get($table, $id)
+    public function get($id)
     {
         $params = [
             'index' => $this->dbName,
-            'type' => $table,
             'id' => $id
         ];
 
@@ -172,31 +166,28 @@ class ElasticsearchClient extends DBWithBooleanParsing
         {
             if (strpos($e->getMessage(), '"found":false') !== false)
             {
-                $this->checkIfTypeExists($params, $table, $e);
-
                 return false;
             }
 
             $this->handleException($e);
         }
+
         return false;
     }
 
 
     /**
      * Aktualizace informací v elasticsearch.
-     * @param string $table
      * @param int $id
      * @param array $data
      * @return bool|mixed
      * @throws DBException
      * @throws Throwable
      */
-    public function update($table, $id, $data)
+    public function update($id, $data)
     {
         $params = [
             'index' => $this->dbName,
-            //'type' => $table,
             'id' => $id,
             'body' => [
                 'doc' => $this->convertToDBDataTypes($data)
@@ -216,8 +207,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
         {
             if (strpos($e->getMessage(), '"type":"document_missing_exception"') !== false)
             {
-                $this->checkIfTypeExists($params, $table, $e);
-
                 throw new DBException(str_replace('{$id}', (string) $id, self::ERROR_UPDATE));
             }
             else
@@ -232,17 +221,15 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Smazání záznamu z elasticsearch.
-     * @param string $table
      * @param int $id
      * @return bool|mixed
      * @throws DBException
      * @throws Throwable
      */
-    public function delete($table, $id)
+    public function delete($id)
     {
         $params = [
             'index' => $this->dbName,
-            'type' => $table,
             'id' => $id
         ];
 
@@ -259,8 +246,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
         {
             if (strpos($e->getMessage(), '"found":false') !== false)
             {
-                $this->checkIfTypeExists($params, $table, $e);
-
                 throw new DBException(str_replace('{$id}', (string) $id, self::ERROR_DELETE));
             }
             else
@@ -275,15 +260,13 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Smazání všech záznamů z elasticsearch.
-     * @param string $table
      * @return bool
      * @throws DBException
      */
-    public function deleteAll($table)
+    public function deleteAll()
     {
         $params = [
             'index' => $this->dbName,
-            'type' => $table,
             'body' => [
                 'query' => [
                     'match_all' => new stdClass()
@@ -291,7 +274,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
             ]
         ];
 
-        $this->checkIfTypeExists($params, $table, new DBException());
         $this->client->deleteByQuery($params);
 
         return true;
@@ -300,25 +282,23 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Nalezení záznamu dle zadaných podmínek.
-     * @param string $table
      * @param array $params
      * @return array|bool|int
      * @throws DBException
      * @throws Throwable
      */
-    public function findBy($table, $params)
+    public function findBy($params)
     {
         $params = $this->checkParams($params);
 
         $paramsES = [
             'index' => $this->dbName,
-            'type' => $table,
             'body' => []
         ];
 
         if (!empty($params[self::PARAM_FIELDS]))
         {
-            $paramsES['_source_include'] = implode(',', $params[self::PARAM_FIELDS]);
+            $paramsES['_source_includes'] = implode(',', $params[self::PARAM_FIELDS]);
         }
 
         if (!empty($params[self::PARAM_WHERE]))
@@ -500,15 +480,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
                 // Pokud zjišťujeme pouze počet záznamů, zajímá nás počet buckets
                 if (!empty($params[self::PARAM_COUNT]))
                 {
-                    $count = count($buckets);
-
-                    // Pokud nebylo nic nalezeno, zjistíme, jestli existuje požadovaný typ
-                    if ($count === 0)
-                    {
-                        $this->checkIfTypeExists($paramsES, $table, new DBException());
-                    }
-
-                    return $count;
+                    return count($buckets);
                 }
 
                 foreach ($buckets as $bucket)
@@ -577,12 +549,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
                     $finalResults[] = $this->convertFromDBDataTypes($row);
                 }
-            }
-
-            // Pokud nejsou výsledky, zjistíme, jestli existuje požadovaný typ
-            if (empty($finalResults))
-            {
-                $this->checkIfTypeExists($paramsES, $table, new DBException());
             }
 
             return $finalResults;
@@ -835,31 +801,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
         }
 
         throw new DBException('No expression matched.');
-    }
-
-
-    /**
-     * Zjištění jestli typ existuje.
-     * @param array $params
-     * @param string $table
-     * @param Throwable $e
-     * @return void
-     * @throws DBException
-     */
-    private function checkIfTypeExists($params, $table, $e)
-    {
-        $data['index'] = $params['index'];
-        $data['type'] = $params['type'];
-
-        $exists = $this->client->indices()->existsType($data);
-
-        if (!$exists)
-        {
-            throw new DBException(
-                str_replace('{$db}', $this->dbName,
-                    str_replace('{$table}', $table, self::ERROR_TABLE_DOESNT_EXIST)
-                ), $e->getCode());
-        }
     }
 
 

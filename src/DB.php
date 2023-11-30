@@ -81,7 +81,7 @@ abstract class DB implements DBInterface
     /* @var string - typ seřazení */
     public const ORDER_BY_DESC_POSTFIX = ' desc';
 
-    /** @var string název databáze/indexu */
+    /** @var string název databáze */
     protected $dbName;
 
     /**
@@ -101,66 +101,73 @@ abstract class DB implements DBInterface
     /**
      * Vloží záznam do tabulky.
      * Pokud již existuje, tak ho upraví.
+     * @param string $tableName
      * @param array $data
      * @return mixed true nebo false podle úspěchu
      * @throws Throwable
      */
-    public abstract function insert($data);
+    public abstract function insert($tableName, $data);
 
 
     /**
      * Hromadně vloží data do tabulky.
      * Pokud již záznam existuje, tak ho upraví.
+     * @param string $tableName
      * @param array $data
      * @return mixed true nebo false podle úspěchu
      * @throws Throwable
      */
-    public abstract function bulkInsert($data);
+    public abstract function bulkInsert($tableName, $data);
 
 
     /**
      * Přečte záznam z tabulky.
+     * @param string $tableName
      * @param int $id
      * @return array|false Nalezený záznam nebo false
      * @throws Throwable
      */
-    public abstract function get($id);
+    public abstract function get($tableName, $id);
 
 
     /**
      * Upraví záznam v tabulce.
+     * @param string $tableName
      * @param int $id
      * @param array $data
      * @return mixed true pokud byl záznam upraven, false pokud nebyl upraven
      * @throws Throwable
      */
-    public abstract function update($id, $data);
+    public abstract function update($tableName, $id, $data);
 
 
     /**
      * Smaže záznam z tabulky.
+     * @param string $tableName
      * @param int $id
      * @return mixed true pokud byl záznam smazán
      * @throws Throwable
      */
-    public abstract function delete($id);
+    public abstract function delete($tableName, $id);
 
 
     /**
      * Smaže všechny záznamy z tabulky.
+     * @param string $tableName
      * @return bool
      * @throws Throwable
      */
-    public abstract function deleteAll();
+    public abstract function deleteAll($tableName);
 
 
     /**
      * Vrátí záznamy odpovídající daným kritériím.
+     * @param string $tableName
      * @param array $params
      * @return int|array
      * @throws Throwable
      */
-    public abstract function findBy($params);
+    public abstract function findBy($tableName, $params);
 
 
 

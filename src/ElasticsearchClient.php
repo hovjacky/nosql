@@ -43,7 +43,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
         }
 
         $this->client = $clientBuilder->build();
-        $this->dbName = $params['index'];
     }
 
 
@@ -59,13 +58,14 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Vložení nových informací do elasticsearch.
+     * @param string $tableName Název indexu
      * @param array $data
      * @return bool
      */
-    public function insert($data)
+    public function insert($tableName, $data)
     {
         $params = [
-            'index' => $this->dbName,
+            'index' => $tableName,
             'body' => $this->convertToDBDataTypes($data)
         ];
 
@@ -89,11 +89,12 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Hromadné vložení informací do elasticsearch.
+     * @param string $tableName Název indexu
      * @param array $data
      * @return bool|mixed
      * @throws DBException
      */
-    public function bulkInsert($data)
+    public function bulkInsert($tableName, $data)
     {
         if (empty($data) || !is_array($data))
         {
@@ -102,7 +103,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
         $generalParams = [
             'index' => [
-                '_index' => $this->dbName,
+                '_index' => $tableName,
             ]
         ];
 
@@ -141,15 +142,16 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Načtení informací o položce z elasticsearch.
+     * @param string $tableName Název indexu
      * @param int $id
      * @return array|false
      * @throws DBException
      * @throws Throwable
      */
-    public function get($id)
+    public function get($tableName, $id)
     {
         $params = [
-            'index' => $this->dbName,
+            'index' => $tableName,
             'id' => $id
         ];
 
@@ -178,16 +180,17 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Aktualizace informací v elasticsearch.
+     * @param string $tableName Název indexu
      * @param int $id
      * @param array $data
      * @return bool|mixed
      * @throws DBException
      * @throws Throwable
      */
-    public function update($id, $data)
+    public function update($tableName, $id, $data)
     {
         $params = [
-            'index' => $this->dbName,
+            'index' => $tableName,
             'id' => $id,
             'body' => [
                 'doc' => $this->convertToDBDataTypes($data)
@@ -221,15 +224,16 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Smazání záznamu z elasticsearch.
+     * @param string $tableName Název indexu
      * @param int $id
      * @return bool|mixed
      * @throws DBException
      * @throws Throwable
      */
-    public function delete($id)
+    public function delete($tableName, $id)
     {
         $params = [
-            'index' => $this->dbName,
+            'index' => $tableName,
             'id' => $id
         ];
 
@@ -260,13 +264,14 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Smazání všech záznamů z elasticsearch.
+     * @param string $tableName Název indexu
      * @return bool
      * @throws DBException
      */
-    public function deleteAll()
+    public function deleteAll($tableName)
     {
         $params = [
-            'index' => $this->dbName,
+            'index' => $tableName,
             'body' => [
                 'query' => [
                     'match_all' => new stdClass()
@@ -282,17 +287,18 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Nalezení záznamu dle zadaných podmínek.
+     * @param string $tableName Název indexu
      * @param array $params
      * @return array|bool|int
      * @throws DBException
      * @throws Throwable
      */
-    public function findBy($params)
+    public function findBy($tableName, $params)
     {
         $params = $this->checkParams($params);
 
         $paramsES = [
-            'index' => $this->dbName,
+            'index' => $tableName,
             'body' => []
         ];
 
@@ -815,7 +821,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
     {
         if (strpos($e->getMessage(), '"type":"index_not_found_exception"') !== false)
         {
-            throw new DBException(str_replace('{$db}', $this->dbName, self::ERROR_DB_DOESNT_EXIST), $e->getCode());
+            throw new DBException(str_replace('{$db}', '', self::ERROR_DB_DOESNT_EXIST), $e->getCode());
         }
 
         throw $e;

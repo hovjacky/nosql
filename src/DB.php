@@ -1,8 +1,6 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Hovjacky\NoSQL;
-
-use Throwable;
 
 /**
  * Class DB
@@ -38,7 +36,7 @@ abstract class DB implements DBInterface
     public const ERROR_AGGREGATION = 'Parametr aggregation musí být pole jako např. ["sum" => ["column1", "column2"], "avg" => "column1"].';
 
     /* @var string - chybová hláška */
-    public const ERROR_DB_DOESNT_EXIST = 'Databáze/index {$db} neexistuje.';
+    public const ERROR_DB_DOESNT_EXIST = 'Databáze/index neexistuje.';
 
     /* @var string - chybová hláška */
     public const ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS = 'Rozdílný počet `?` a hodnot v dotazu.';
@@ -81,120 +79,21 @@ abstract class DB implements DBInterface
     /* @var string - typ seřazení */
     public const ORDER_BY_DESC_POSTFIX = ' desc';
 
-    /** @var string název databáze */
-    protected $dbName;
 
     /**
      * DB constructor.
-     * @param array $params
+     * @param array<string, scalar> $params Parametry proměnných: Název -> hodnota
      */
-    public abstract function __construct(array $params);
-
-
-    /**
-     * Vrátí klienta pro možnost vytvoření jakéhokoliv dotazu vázaného přímo na danou databázi.
-     * @return mixed
-     */
-    public abstract function getClient();
-
-
-    /**
-     * Vloží záznam do tabulky.
-     * Pokud již existuje, tak ho upraví.
-     * @param string $tableName
-     * @param array $data
-     * @return mixed true nebo false podle úspěchu
-     * @throws Throwable
-     */
-    public abstract function insert($tableName, $data);
-
-
-    /**
-     * Hromadně vloží data do tabulky.
-     * Pokud již záznam existuje, tak ho upraví.
-     * @param string $tableName
-     * @param array $data
-     * @return mixed true nebo false podle úspěchu
-     * @throws Throwable
-     */
-    public abstract function bulkInsert($tableName, $data);
-
-
-    /**
-     * Přečte záznam z tabulky.
-     * @param string $tableName
-     * @param int $id
-     * @return array|false Nalezený záznam nebo false
-     * @throws Throwable
-     */
-    public abstract function get($tableName, $id);
-
-
-    /**
-     * Upraví záznam v tabulce.
-     * @param string $tableName
-     * @param int $id
-     * @param array $data
-     * @return mixed true pokud byl záznam upraven, false pokud nebyl upraven
-     * @throws Throwable
-     */
-    public abstract function update($tableName, $id, $data);
-
-
-    /**
-     * Smaže záznam z tabulky.
-     * @param string $tableName
-     * @param int $id
-     * @return mixed true pokud byl záznam smazán
-     * @throws Throwable
-     */
-    public abstract function delete($tableName, $id);
-
-
-    /**
-     * Smaže všechny záznamy z tabulky.
-     * @param string $tableName
-     * @return bool
-     * @throws Throwable
-     */
-    public abstract function deleteAll($tableName);
-
-
-    /**
-     * Vrátí záznamy odpovídající daným kritériím.
-     * @param string $tableName
-     * @param array $params
-     * @return int|array
-     * @throws Throwable
-     */
-    public abstract function findBy($tableName, $params);
-
-
-
-    /**
-     * Překonvertuje některé datové typy pro databázi.
-     * @param array $data
-     * @return array
-     */
-	public abstract function convertToDBDataTypes($data);
-
-
-
-    /**
-     * Překonvertuje některé datové typy pro PHP.
-     * @param array $data
-     * @return array
-     */
-	public abstract function convertFromDBDataTypes($data);
+    abstract public function __construct(array $params);
 
 
     /**
      * Zkontroluje parametry pro findBy, popř. vyhodí výjimku nebo je upraví.
-     * @param array $params
-     * @return mixed
+     * @param array<string, mixed> $params Sloupec -> hodnota
+     * @return array<string, mixed> Sloupec -> upravená hodnota
      * @throws DBException
      */
-    protected function checkParams($params)
+    protected function checkAndRepairParams(array $params): array
     {
         if (!empty($params[self::PARAM_FIELDS]) && !is_array($params[self::PARAM_FIELDS]))
         {

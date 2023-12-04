@@ -1,4 +1,4 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Hovjacky\NoSQL;
 
@@ -10,97 +10,97 @@ use Throwable;
  */
 interface DBInterface
 {
-	/**
-	 * Vrátí klienta pro možnost vytvoření jakéhokoliv dotazu vázaného přímo na danou databázi.
-	 * @return mixed
-	 */
-	public function getClient();
+    /**
+     * Vrátí klienta pro možnost vytvoření jakéhokoliv dotazu vázaného přímo na danou databázi.
+     * @return mixed
+     */
+    public function getClient(): mixed;
 
 
-	/**
-	 * Vloží záznam do tabulky.
-	 * Pokud již existuje, tak ho upraví.
+    /**
+     * Vloží záznam do tabulky.
+     * Pokud již existuje, tak ho upraví.
      * @param string $tableName
-	 * @param array $data
-	 * @return mixed true nebo false podle úspěchu
-	 * @throws Throwable
-	 */
-	public function insert($tableName, $data);
+     * @param array<string, mixed> $data Sloupec -> hodnota
+     * @return bool Vrací, zda byl záznam založen/upraven
+     * @throws Throwable
+     */
+    public function insertOrUpdate(string $tableName, array $data): bool;
 
 
-	/**
-	 * Hromadně vloží data do tabulky.
-	 * Pokud již záznam existuje, tak ho upraví.
+    /**
+     * Hromadně vloží data do tabulky.
+     * Pokud již záznam existuje, tak ho upraví.
      * @param string $tableName
-	 * @param array $data
-	 * @return mixed true nebo false podle úspěchu
-	 * @throws Throwable
-	 */
-	public function bulkInsert($tableName, $data);
+     * @param array<int, array<string, mixed>> $data Řádky k uložení: Sloupec -> hodnota
+     * @return bool Vrací, zda byly záznamy založeny/upraveny
+     * @throws Throwable
+     */
+    public function bulkInsertOrUpdate(string $tableName, array $data): bool;
 
 
-	/**
-	 * Přečte záznam z tabulky.
+    /**
+     * Přečte záznam z tabulky.
      * @param string $tableName
-	 * @param int $id
-	 * @return array|false Nalezený záznam nebo false
-	 * @throws Throwable
-	 */
-	public function get($tableName, $id);
+     * @param int $id
+     * @return array<string, mixed>|null Vrací nalezený záznam nebo null
+     * @throws Throwable
+     */
+    public function get(string $tableName, int $id): ?array;
 
 
-	/**
-	 * Upraví záznam v tabulce.
+    /**
+     * Upraví záznam v tabulce.
      * @param string $tableName
-	 * @param int $id
-	 * @param array $data
-	 * @return mixed true pokud byl záznam upraven, false pokud nebyl upraven
-	 * @throws Throwable
-	 */
-	public function update($tableName, $id, $data);
+     * @param int $id
+     * @param array<string, mixed> $data Sloupec -> hodnota
+     * @return bool Vrací, zda byl záznam upraven
+     * @throws Throwable
+     */
+    public function update(string $tableName, int $id, array $data): bool;
 
 
-	/**
-	 * Smaže záznam z tabulky.
+    /**
+     * Smaže záznam z tabulky.
      * @param string $tableName
-	 * @param int $id
-	 * @return mixed true pokud byl záznam smazán
-	 * @throws Throwable
-	 */
-	public function delete($tableName, $id);
+     * @param int $id
+     * @return bool true pokud byl záznam smazán, jinak vyhodí výjimku
+     * @throws Throwable
+     */
+    public function delete(string $tableName, int $id): bool;
 
 
-	/**
-	 * Smaže všechny záznamy z tabulky.
+    /**
+     * Smaže všechny záznamy z tabulky.
      * @param string $tableName
-	 * @return bool
-	 * @throws Throwable
-	 */
-	public function deleteAll($tableName);
+     * @return true true pokud byl záznam smazán, jinak vyhodí výjimku
+     * @throws Throwable
+     */
+    public function deleteAll(string $tableName): true;
 
 
-	/**
-	 * Vrátí záznamy odpovídající daným kritériím
+    /**
+     * Vrátí záznamy odpovídající daným kritériím.
      * @param string $tableName
-	 * @param array $params
-	 * @return int|array
-	 * @throws Throwable
-	 */
-	public function findBy($tableName, $params);
+     * @param array<string, mixed> $params
+     * @return array<int, array<string, mixed>>|int Nalezené záznamy nebo počet nalezených záznamů
+     * @throws Throwable
+     */
+    public function findBy(string $tableName, array $params): array|int;
 
 
-	/**
-	 * Překonvertuje některé datové typy pro databázi
-	 * @param array $data
-	 * @return array
-	 */
-	public function convertToDBDataTypes($data);
+    /**
+     * Překonvertuje některé datové typy pro databázi.
+     * @param array<string, mixed> $data Sloupec -> hodnota
+     * @return array<string, mixed> Sloupec -> upravená hodnota
+     */
+    public function convertToDBDataTypes(array $data): array;
 
 
-	/**
-	 * Překonvertuje některé datové typy pro PHP
-	 * @param array $data
-	 * @return array
-	 */
-	public function convertFromDBDataTypes($data);
+    /**
+     * Překonvertuje některé datové typy pro PHP.
+     * @param array<string, mixed> $data Sloupec -> hodnota
+     * @return array<string, mixed> Sloupec -> upravená hodnota
+     */
+    public function convertFromDBDataTypes(array $data): array;
 }

@@ -10,5 +10,4 @@ use Exception;
  */
 class DBException extends Exception
 {
-
 }

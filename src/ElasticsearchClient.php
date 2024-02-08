@@ -451,6 +451,8 @@ class ElasticsearchClient extends DBWithBooleanParsing
         {
             try
             {
+                unset($paramsES['body']['size']);
+
                 $results = $this->client->count($paramsES);
 
                 return $results[self::PARAM_COUNT];

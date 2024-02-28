@@ -18,6 +18,9 @@ class ElasticsearchClient extends DBWithBooleanParsing
     /** @var Client */
     private Client $client;
 
+    /** @var callable(string $value): string|null */
+    private $wildcardValueFilter = null;
+
 
     /** @var int výchozí limit vrácených položek z elasticu */
     public const DEFAULT_LIMIT = 100;
@@ -43,6 +46,16 @@ class ElasticsearchClient extends DBWithBooleanParsing
         }
 
         $this->client = $clientBuilder->build();
+    }
+
+
+    /**
+     * Definice filtru hodnoty u wildcard filtru (= LIKE).
+     * @param callable(string $value): string $wildcardValueFilter
+     */
+    public function setWildcardValueFilter(callable $wildcardValueFilter): void
+    {
+        $this->wildcardValueFilter = $wildcardValueFilter;
     }
 
 
@@ -758,6 +771,12 @@ class ElasticsearchClient extends DBWithBooleanParsing
         if (($pos = strpos($expr, ' LIKE ')) !== false)
         {
             $val = trim(mb_substr($expr, $pos + 6));
+
+            if ($this->wildcardValueFilter !== null)
+            {
+                $val = call_user_func($this->wildcardValueFilter, $val);
+            }
+
             $result['wildcard'][trim(mb_substr($expr, 0, $pos))] = mb_strtolower(
                 (string) mb_ereg_replace('%', '*', $val),
             );

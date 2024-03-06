@@ -103,7 +103,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
      * @return bool
      * @throws DBException
      */
-    public function bulkInsertOrUpdate(string $tableName, array $data): bool
+    public function bulkInsertOrUpdate(string $tableName, array $data, bool $waitForDataRefresh = false): bool
     {
         if (empty($data))
         {
@@ -129,6 +129,11 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
             $params['body'][] = $generalParams;
             $params['body'][] = $this->convertToDBDataTypes($row);
+        }
+
+        if ($waitForDataRefresh)
+        {
+            $params['refresh'] = 'wait_for';
         }
 
         $responses = $this->client->bulk($params);

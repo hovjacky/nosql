@@ -12,10 +12,10 @@
         }
     ],
     "require": {
-        "php": ">=8.2 <8.3",
+        "php": ">=8.2 <8.4",
         "ext-mbstring": "*",
         "elasticsearch/elasticsearch": "^7.15.0",
-        "tracy/tracy": "^2.8"
+        "tracy/tracy": "^2.10"
     },
     "autoload": {
         "psr-4": { "Hovjacky\\NoSQL\\": "src" }

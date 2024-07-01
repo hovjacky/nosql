@@ -12,9 +12,9 @@
         }
     ],
     "require": {
-        "php": "^7.0",
-        "elasticsearch/elasticsearch": "6.1.0",
-        "tracy/tracy": "^2.4"
+        "php": "^7.0 || ^8.3",
+        "elasticsearch/elasticsearch": "6.8.3",
+        "tracy/tracy": "^2.10"
     },
     "autoload": {
         "psr-4": { "Hovjacky\\NoSQL\\": "src" }

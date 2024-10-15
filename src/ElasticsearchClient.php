@@ -28,6 +28,9 @@ class ElasticsearchClient extends DBWithBooleanParsing
     /** @var int Tímto se to bude chovat jako SQL, vrátí jeden záznam pro jednu GROUP BY hodnotu, ale dalo by se nastavit i jinak. */
     public const DEFAULT_GROUP_LIMIT = 1;
 
+    /** @var string visruální parametr s daty bucketu z odpovědi z Elasticsearch */
+    public const PARAM_BUCKET = '__bucket';
+
 
     /**
      * ElasticsearchClient constructor.
@@ -285,7 +288,12 @@ class ElasticsearchClient extends DBWithBooleanParsing
      * @throws DBException
      * @throws Throwable
      */
-    public function findBy(string $tableName, array $params): array|int
+    public function findBy(
+        string $tableName,
+        array $params,
+        ?callable $modifyParamsCallback = null,
+        &$resultData = null
+    ): array|int
     {
         $params = $this->checkAndRepairParams($params);
 
@@ -306,6 +314,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
             foreach ($params[self::PARAM_WHERE] as $condition => $values)
             {
                 $values = $this->convertToDBDataTypes($values);
+
                 $parsedBooleanQuery = $this->parseBooleanQuery($this->putValuesIntoQuery($condition, $values));
 
                 if (count($params[self::PARAM_WHERE]) === 1)
@@ -471,7 +480,9 @@ class ElasticsearchClient extends DBWithBooleanParsing
             {
                 unset($paramsES['body']['size']);
 
-                $results = $this->client->count($paramsES);
+                $results = $this->client->count(
+                    $modifyParamsCallback !== null ? $modifyParamsCallback($paramsES) : $paramsES,
+                );
 
                 return $results[self::PARAM_COUNT];
             }
@@ -483,7 +494,9 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
         try
         {
-            $results = $this->client->search($paramsES);
+            $resultData = $results = $this->client->search(
+                $modifyParamsCallback !== null ? $modifyParamsCallback($paramsES) : $paramsES,
+            );
 
             $finalResults = [];
 
@@ -532,6 +545,8 @@ class ElasticsearchClient extends DBWithBooleanParsing
                             }
                         }
                     }
+
+                    $result[self::PARAM_BUCKET] = $bucket;
 
                     $finalResults[] = $this->convertFromDBDataTypes($result);
                 }
@@ -701,9 +716,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
         if (($pos = strpos($expr, '<=')) !== false)
         {
             $val = trim(substr($expr, $pos + 2));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['lte'] = is_numeric(
-                $val,
-            ) ? (int) $val : $val;
+            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['lte'] = $this->normalizeValue($val);
 
             return $result;
         }
@@ -711,9 +724,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
         if (($pos = strpos($expr, '>=')) !== false)
         {
             $val = trim(substr($expr, $pos + 2));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['gte'] = is_numeric(
-                $val,
-            ) ? (int) $val : $val;
+            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['gte'] = $this->normalizeValue($val);
 
             return $result;
         }
@@ -721,7 +732,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
         if (($pos = strpos($expr, '!=')) !== false)
         {
             $val = trim(substr($expr, $pos + 2));
-            $result['bool']['must_not']['match'][trim(substr($expr, 0, $pos))] = is_numeric($val) ? (int) $val : $val;
+            $result['bool']['must_not']['match'][trim(substr($expr, 0, $pos))] = $this->normalizeValue($val);
 
             return $result;
         }
@@ -729,9 +740,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
         if (($pos = strpos($expr, '<')) !== false)
         {
             $val = trim(substr($expr, $pos + 1));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['lt'] = is_numeric(
-                $val,
-            ) ? (int) $val : $val;
+            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['lt'] = $this->normalizeValue($val);
 
             return $result;
         }
@@ -739,9 +748,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
         if (($pos = strpos($expr, '>')) !== false)
         {
             $val = trim(substr($expr, $pos + 1));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['gt'] = is_numeric(
-                $val,
-            ) ? (int) $val : $val;
+            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['gt'] = $this->normalizeValue($val);
 
             return $result;
         }
@@ -767,7 +774,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
             }
             else
             {
-                $result['match'][trim(substr($expr, 0, $pos))] = is_numeric($val) ? (int) $val : $val;
+                $result['match'][trim(substr($expr, 0, $pos))] = $this->normalizeValue($val);
             }
 
             return $result;
@@ -819,6 +826,25 @@ class ElasticsearchClient extends DBWithBooleanParsing
         }
 
         throw new DBException('No expression matched.');
+    }
+
+
+    /**
+     * Normalizuje hodnotu parametru query.
+     */
+    private function normalizeValue(mixed $value): mixed
+    {
+        // Pokud se jedná o číslenou hodnotu, převedeme ji na int/float.
+        if (
+            is_numeric($value)
+            // Pokud se jedná o celé číslo, které začíná nulou, není ho možné převést na číslo!
+            && !(is_string($value) && ctype_digit($value) && $value[0] === '0')
+        )
+        {
+            return ctype_digit($value) ? (int) $value : (float) $value;
+        }
+
+        return $value;
     }
 
 

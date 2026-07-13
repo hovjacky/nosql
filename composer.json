@@ -14,7 +14,7 @@
     "require": {
         "php": ">=8.2 <8.4",
         "ext-mbstring": "*",
-        "elasticsearch/elasticsearch": "^7.15.0",
+        "elasticsearch/elasticsearch": "^9.0",
         "tracy/tracy": "^2.10"
     },
     "autoload": {

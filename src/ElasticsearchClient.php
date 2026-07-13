@@ -3,8 +3,11 @@
 namespace Hovjacky\NoSQL;
 
 use DateTime;
-use Elasticsearch\Client;
-use Elasticsearch\ClientBuilder;
+use Elastic\Elasticsearch\Client;
+use Elastic\Elasticsearch\ClientBuilder;
+use Elastic\Elasticsearch\Exception\ClientResponseException;
+use Elastic\Elasticsearch\Response\Elasticsearch;
+use Http\Promise\Promise;
 use Throwable;
 use Tracy\Debugger;
 use stdClass;
@@ -37,11 +40,30 @@ class ElasticsearchClient extends DBWithBooleanParsing
      */
     public function __construct(array $params)
     {
-        $withAuth = !empty($params['username']) && !empty($params['password']);
+        // Elasticsearch 8+ má security (TLS + autentizaci) ve výchozím stavu zapnutou
+        // a přihlašovací údaje se předávají odděleně, ne inline v URL jako v 7.x.
+        $scheme = !empty($params['scheme'])
+            ? $params['scheme']
+            : (!empty($params['username']) ? 'https' : 'http');
 
-        $connectionParams[] = ($withAuth ? "https://{$params['username']}:{$params['password']}@" : '') . $params['host'] . (!empty($params['port']) ? ':' . $params['port'] : '');
+        $host = $scheme . '://' . $params['host'] . (!empty($params['port']) ? ':' . $params['port'] : '');
 
-        $clientBuilder = ClientBuilder::create()->setHosts($connectionParams);
+        $clientBuilder = ClientBuilder::create()->setHosts([$host]);
+
+        if (!empty($params['username']) && !empty($params['password']))
+        {
+            $clientBuilder->setBasicAuthentication((string) $params['username'], (string) $params['password']);
+        }
+
+        if (!empty($params['apiKey']))
+        {
+            $clientBuilder->setApiKey((string) $params['apiKey']);
+        }
+
+        if (!empty($params['caCert']))
+        {
+            $clientBuilder->setCABundle((string) $params['caCert']);
+        }
 
         if (!empty($params['disableSslVerification']))
         {
@@ -88,7 +110,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
             $params['id'] = $data['id'];
         }
 
-        $response = $this->client->index($params);
+        $response = $this->responseToArray($this->client->index($params));
 
         if ($response['result'] !== 'created' && $response['result'] !== 'updated')
         {
@@ -139,7 +161,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
             $params['refresh'] = 'wait_for';
         }
 
-        $responses = $this->client->bulk($params);
+        $responses = $this->responseToArray($this->client->bulk($params));
 
         if ($responses['errors'] !== false)
         {
@@ -169,20 +191,25 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
         try
         {
-            $response = $this->client->get($params);
+            $response = $this->responseToArray($this->client->get($params));
 
-            if ($response['found'] === true)
+            if (($response['found'] ?? false) === true)
             {
                 return $this->convertFromDBDataTypes($response['_source']);
             }
         }
-        catch(Throwable $e)
+        catch(ClientResponseException $e)
         {
-            if (strpos($e->getMessage(), '"found":false') !== false)
+            // Nenalezený dokument vrací v Elasticsearch 8+ HTTP 404.
+            if ($e->getCode() === 404)
             {
                 return null;
             }
 
+            $this->handleException($e);
+        }
+        catch(Throwable $e)
+        {
             $this->handleException($e);
         }
 
@@ -207,20 +234,24 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
         try
         {
-            $response = $this->client->update($params);
+            $response = $this->responseToArray($this->client->update($params));
 
             if ($response['result'] === 'updated')
             {
                 return true;
             }
         }
-        catch(Throwable $e)
+        catch(ClientResponseException $e)
         {
-            if (str_contains($e->getMessage(), '"type":"document_missing_exception"'))
+            if ($this->getElasticErrorType($e) === 'document_missing_exception')
             {
                 throw new DBException(str_replace('{$id}', (string) $id, self::ERROR_UPDATE));
             }
 
+            $this->handleException($e);
+        }
+        catch(Throwable $e)
+        {
             $this->handleException($e);
         }
 
@@ -242,20 +273,26 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
         try
         {
-            $response = $this->client->delete($params);
+            $response = $this->responseToArray($this->client->delete($params));
 
             if ($response['result'] === 'deleted')
             {
                 return true;
             }
         }
-        catch(Throwable $e)
+        catch(ClientResponseException $e)
         {
-            if (str_contains($e->getMessage(), '"found":false'))
+            // Mazání neexistujícího dokumentu vrací v Elasticsearch 8+ HTTP 404
+            // (neexistující index má naopak error type index_not_found_exception).
+            if ($e->getCode() === 404 && $this->getElasticErrorType($e) !== 'index_not_found_exception')
             {
                 throw new DBException(str_replace('{$id}', (string) $id, self::ERROR_DELETE));
             }
 
+            $this->handleException($e);
+        }
+        catch(Throwable $e)
+        {
             $this->handleException($e);
         }
 
@@ -271,6 +308,9 @@ class ElasticsearchClient extends DBWithBooleanParsing
     {
         $params = [
             'index' => $tableName,
+            // Konflikty verzí (souběžná změna dokumentu) ignorujeme a mažeme dál – sémantika "smaž vše".
+            // V Elasticsearch 8+ by jinak delete_by_query s konfliktem vrátil HTTP 409 a klient by vyhodil výjimku.
+            'conflicts' => 'proceed',
             'body' => [
                 'query' => [
                     'match_all' => new stdClass(),
@@ -285,6 +325,68 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
 
     /**
+     * Zjistí, zda index existuje.
+     * @throws Throwable
+     */
+    public function indexExists(string $tableName): bool
+    {
+        try
+        {
+            $response = $this->client->indices()->exists(['index' => $tableName]);
+            // V synchronním režimu vrací klient vždy Elasticsearch, nikdy Promise.
+            assert($response instanceof Elasticsearch);
+
+            return $response->asBool();
+        }
+        catch(ClientResponseException $e)
+        {
+            if ($e->getCode() === 404)
+            {
+                return false;
+            }
+
+            throw $e;
+        }
+    }
+
+
+    /**
+     * Smaže index. Pokud index neexistuje, nic se neděje.
+     * @throws DBException
+     * @throws Throwable
+     */
+    public function deleteIndex(string $tableName): void
+    {
+        try
+        {
+            $this->client->indices()->delete(['index' => $tableName]);
+        }
+        catch(ClientResponseException $e)
+        {
+            // Neexistující index při mazání ignorujeme.
+            if ($e->getCode() !== 404)
+            {
+                $this->handleException($e);
+            }
+        }
+    }
+
+
+    /**
+     * Vytvoří index podle zadané definice (settings + mappings).
+     * @param array<string, mixed> $definition tělo požadavku pro vytvoření indexu
+     */
+    public function createIndex(string $tableName, array $definition): void
+    {
+        $this->client->indices()->create([
+            'index' => $tableName,
+            'body' => $definition,
+        ]);
+    }
+
+
+    /**
+     * @param array<mixed>|null $resultData Surová odpověď z Elasticsearch (předává se referencí).
      * @throws DBException
      * @throws Throwable
      */
@@ -292,7 +394,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
         string $tableName,
         array $params,
         ?callable $modifyParamsCallback = null,
-        &$resultData = null
+        ?array &$resultData = null
     ): array|int
     {
         $params = $this->checkAndRepairParams($params);
@@ -480,9 +582,9 @@ class ElasticsearchClient extends DBWithBooleanParsing
             {
                 unset($paramsES['body']['size']);
 
-                $results = $this->client->count(
+                $results = $this->responseToArray($this->client->count(
                     $modifyParamsCallback !== null ? $modifyParamsCallback($paramsES) : $paramsES,
-                );
+                ));
 
                 return $results[self::PARAM_COUNT];
             }
@@ -494,9 +596,9 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
         try
         {
-            $resultData = $results = $this->client->search(
+            $resultData = $results = $this->responseToArray($this->client->search(
                 $modifyParamsCallback !== null ? $modifyParamsCallback($paramsES) : $paramsES,
-            );
+            ));
 
             $finalResults = [];
 
@@ -651,7 +753,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
 
     /**
-     * @param array<string, array<string, array>> $result
+     * @param array<string, array<string, array<mixed>>> $result
      */
     protected function addAndClause(array &$result, array $clause): void
     {
@@ -660,7 +762,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
 
     /**
-     * @param array<string, array<string, array>> $result
+     * @param array<string, array<string, array<mixed>>> $result
      */
     protected function addOrClause(array &$result, array $clause): void
     {
@@ -856,11 +958,43 @@ class ElasticsearchClient extends DBWithBooleanParsing
      */
     private function handleException(Throwable $e): never
     {
-        if (str_contains($e->getMessage(), '"type":"index_not_found_exception"'))
+        if ($this->getElasticErrorType($e) === 'index_not_found_exception')
         {
             throw new DBException(self::ERROR_DB_DOESNT_EXIST, $e->getCode());
         }
 
         throw $e;
+    }
+
+
+    /**
+     * Vytáhne z výjimky Elasticsearch klienta typ chyby (error.type).
+     * V Elasticsearch 8+ je tělo odpovědi součástí zprávy výjimky.
+     */
+    private function getElasticErrorType(Throwable $e): ?string
+    {
+        if (preg_match('/"type"\s*:\s*"([^"]+)"/', $e->getMessage(), $matches) === 1)
+        {
+            return $matches[1];
+        }
+
+        return null;
+    }
+
+
+    /**
+     * Převede odpověď klienta na pole. Klient používáme synchronně, takže vrací vždy
+     * Elasticsearch, nikdy Promise (ta se vrací jen v asynchronním režimu).
+     *
+     * Návratový typ je záměrně netypované `array` – jde o dynamickou JSON odpověď
+     * z Elasticsearch a typování na `array<mixed>` by u navazujícího přístupu ke
+     * vnořeným klíčům spouštělo na úrovni max chyby o přístupu na `mixed`.
+     * @phpstan-ignore missingType.iterableValue
+     */
+    private function responseToArray(Elasticsearch|Promise $response): array
+    {
+        assert($response instanceof Elasticsearch);
+
+        return $response->asArray();
     }
 }

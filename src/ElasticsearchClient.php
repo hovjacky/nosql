@@ -182,11 +182,11 @@ class ElasticsearchClient extends DBWithBooleanParsing
      * @throws DBException
      * @throws Throwable
      */
-    public function get(string $tableName, int $id): ?array
+    public function get(string $tableName, string|int $id): ?array
     {
         $params = [
             'index' => $tableName,
-            'id' => $id,
+            'id' => (string) $id,
         ];
 
         try
@@ -222,11 +222,11 @@ class ElasticsearchClient extends DBWithBooleanParsing
      * @throws DBException
      * @throws Throwable
      */
-    public function update(string $tableName, int $id, array $data): bool
+    public function update(string $tableName, string|int $id, array $data): bool
     {
         $params = [
             'index' => $tableName,
-            'id' => $id,
+            'id' => (string) $id,
             'body' => [
                 'doc' => $this->convertToDBDataTypes($data),
             ],
@@ -264,11 +264,11 @@ class ElasticsearchClient extends DBWithBooleanParsing
      * @throws DBException
      * @throws Throwable
      */
-    public function delete(string $tableName, int $id): bool
+    public function delete(string $tableName, string|int $id): bool
     {
         $params = [
             'index' => $tableName,
-            'id' => $id,
+            'id' => (string) $id,
         ];
 
         try

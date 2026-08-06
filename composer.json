@@ -12,7 +12,7 @@
         }
     ],
     "require": {
-        "php": ">=8.2 <8.4",
+        "php": ">=8.2 <8.6",
         "ext-mbstring": "*",
         "elasticsearch/elasticsearch": "^9.0",
         "tracy/tracy": "^2.10"
@@ -22,7 +22,7 @@
     },
     "require-dev": {
         "roave/security-advisories": "dev-latest",
-        "phpstan/phpstan": "^1.10.15"
+        "phpstan/phpstan": "^2.0"
     },
     "scripts": {
         "phpstan": "vendor/bin/phpstan analyse -c phpstan.neon --memory-limit=256M"

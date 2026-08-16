@@ -889,25 +889,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
             );
         }
 
-        // Kontrola na IN musí být až za LIKE - hodnota LIKE je volný text a může obsahovat ` IN `.
-        if (($pos = mb_strpos($expr, ' NOT IN ')) !== false)
-        {
-            $result['bool']['must_not']['terms'][trim(mb_substr($expr, 0, $pos))] = $this->parseRequiredListValue(
-                trim(mb_substr($expr, $pos + 8)),
-            );
-
-            return $result;
-        }
-
-        if (($pos = mb_strpos($expr, ' IN ')) !== false)
-        {
-            $result['terms'][trim(mb_substr($expr, 0, $pos))] = $this->parseRequiredListValue(
-                trim(mb_substr($expr, $pos + 4)),
-            );
-
-            return $result;
-        }
-
         if (($pos = strpos($expr, ' IS NULL')) !== false)
         {
             $result['bool']['must_not']['exists']['field'] = trim(mb_substr($expr, 0, $pos));
@@ -933,6 +914,27 @@ class ElasticsearchClient extends DBWithBooleanParsing
                 'operator' => 'and',
                 'fields' => explode(',', $fields),
             ];
+
+            return $result;
+        }
+
+        // Kontrola na IN musí být až jako poslední - hodnoty LIKE a CROSS FIELDS
+        // jsou volný text a mohou obsahovat ` IN `. Podmínka IN naopak nemůže
+        // obsahovat žádný z výše kontrolovaných operátorů ani klíčových slov.
+        if (($pos = mb_strpos($expr, ' NOT IN ')) !== false)
+        {
+            $result['bool']['must_not']['terms'][trim(mb_substr($expr, 0, $pos))] = $this->parseRequiredListValue(
+                trim(mb_substr($expr, $pos + 8)),
+            );
+
+            return $result;
+        }
+
+        if (($pos = mb_strpos($expr, ' IN ')) !== false)
+        {
+            $result['terms'][trim(mb_substr($expr, 0, $pos))] = $this->parseRequiredListValue(
+                trim(mb_substr($expr, $pos + 4)),
+            );
 
             return $result;
         }

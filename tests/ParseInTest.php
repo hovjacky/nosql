@@ -63,6 +63,22 @@ final class ParseInTest extends TestCase
     }
 
 
+    public function testCrossFieldsValueContainingInKeywordIsParsedAsCrossFields(): void
+    {
+        self::assertSame(
+            [
+                'multi_match' => [
+                    'query' => 'CHECK IN HOTEL',
+                    'type' => 'cross_fields',
+                    'operator' => 'and',
+                    'fields' => ['name', 'description'],
+                ],
+            ],
+            $this->client->buildQuery('name,description CROSS FIELDS CHECK IN HOTEL'),
+        );
+    }
+
+
     public function testInWithoutListValueThrows(): void
     {
         $this->expectException(DBException::class);

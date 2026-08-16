@@ -24,6 +24,9 @@ class ElasticsearchClient extends DBWithBooleanParsing
     /** @var callable(string $value): string|null */
     private $wildcardValueFilter = null;
 
+    /** @var array<string, mixed[]> hodnoty seznamů právě parsované where podmínky (klíč = placeholder `#n#`) */
+    private array $listPlaceholders = [];
+
 
     /** @var int výchozí limit vrácených položek z elasticu */
     public const DEFAULT_LIMIT = 100;
@@ -415,9 +418,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
             foreach ($params[self::PARAM_WHERE] as $condition => $values)
             {
-                $values = $this->convertToDBDataTypes($values);
-
-                $parsedBooleanQuery = $this->parseBooleanQuery($this->putValuesIntoQuery($condition, $values));
+                $parsedBooleanQuery = $this->parseWhereCondition($condition, $this->convertToDBDataTypes($values));
 
                 if (count($params[self::PARAM_WHERE]) === 1)
                 {
@@ -944,6 +945,24 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
 
     /**
+     * Rozparsuje where podmínku s hodnotami na Elasticsearch query.
+     * Seznamy hodnot se do podmínky vkládají jako placeholdery, skutečné hodnoty
+     * se předávají bokem (viz parseListValue).
+     * @param mixed[]|null $values
+     * @return array<string, mixed>
+     * @throws DBException
+     */
+    protected function parseWhereCondition(string $condition, ?array $values): array
+    {
+        $this->listPlaceholders = [];
+
+        return $this->parseBooleanQuery(
+            $this->putValuesIntoQuery($condition, $values, placeholders: $this->listPlaceholders),
+        );
+    }
+
+
+    /**
      * Rozparsuje seznam hodnot ve formátu `[a,b,c]`.
      * Vrací null, pokud hodnota není seznam.
      * @return list<int|string>|null
@@ -955,7 +974,15 @@ class ElasticsearchClient extends DBWithBooleanParsing
             return null;
         }
 
-        $items = explode(',', substr($value, $start + 1, $end - 1));
+        $content = substr($value, $start + 1, $end - $start - 1);
+
+        // Seznam předaný jako hodnota placeholderu - vracíme původní hodnoty beze změny.
+        if (preg_match('/^#\d+#$/', $content) === 1 && isset($this->listPlaceholders[$content]))
+        {
+            return array_values($this->listPlaceholders[$content]);
+        }
+
+        $items = explode(',', $content);
 
         foreach ($items as $key => $item)
         {

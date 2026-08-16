@@ -44,32 +44,30 @@ abstract class DBWithBooleanParsing extends DB
                     throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
                 }
 
-                // Hodnotou může být i pole hodnot, převedeme jej do textové podoby
+                // Hodnotou může být i pole hodnot - do dotazu se vloží jako placeholder `[#n#]`
+                // a skutečné hodnoty se předají bokem v poli $placeholders. Hodnoty seznamu tak
+                // nepodléhají textové serializaci ani sanitizaci a zachovají si původní typy.
                 if (is_array($value))
                 {
-                    $replace = '[' . implode(',', $value) . ']';
+                    $replace = '[#' . $placeholdersCount . '#]';
+                    $placeholders['#' . $placeholdersCount++ . '#'] = $value;
                 }
-                elseif (is_scalar($value))
-                {
-                    $replace = (string) $value;
-                }
-
-                if ($putPlaceholdersForDate && $value instanceof DateTimeInterface)
+                elseif ($putPlaceholdersForDate && $value instanceof DateTimeInterface)
                 {
                     // Místo data dáme placeholder a datum uložíme do pole $placeholders
                     $replace = '#' . $placeholdersCount++ . '#';
                     $placeholders[$replace] = $value;
                 }
-
-                if (!isset($replace) || !is_string($replace))
+                elseif (is_scalar($value))
+                {
+                    // Závorky nejsou v hodnotách povoleny, odstraníme je...
+                    // Znak `~` je povolen, protože se používá jako escape znak LIKE podmínek (klauzule ESCAPE).
+                    $replace = (string) preg_replace('/[^\p{L}\p{N}\-_@., :\+\[\]%~]/u', '', (string) $value);
+                }
+                else
                 {
                     throw new DBException('Hodnota filtru musí být převeditelná na textový řetězec');
                 }
-
-                // Závorky nejsou v hodnotách povoleny, odstraníme je...
-                // Znak `~` je povolen, protože se používá jako escape znak LIKE podmínek (klauzule ESCAPE).
-                /** @var string $replace */
-                $replace = preg_replace('/[^\p{L}\p{N}\-_@., :\+\[\]%~]/u', '', $replace);
 
                 $condition = (string) preg_replace($from, $replace, $condition, 1);
             }

@@ -63,6 +63,33 @@ final class ParseInTest extends TestCase
     }
 
 
+    public function testInValuesContainingCommasAreParsedReliably(): void
+    {
+        self::assertSame(
+            ['terms' => ['name' => ['Novák, Jan', 'Svoboda, Petr']]],
+            $this->client->buildQuery('name IN ?', [['Novák, Jan', 'Svoboda, Petr']]),
+        );
+    }
+
+
+    public function testInValuesKeepOriginalTypes(): void
+    {
+        self::assertSame(
+            ['terms' => ['code' => [1, '02', 'abc']]],
+            $this->client->buildQuery('code IN ?', [[1, '02', 'abc']]),
+        );
+    }
+
+
+    public function testEqualsWithArrayValueContainingCommasBuildsExactTerms(): void
+    {
+        self::assertSame(
+            ['terms' => ['name' => ['Novák, Jan', 'Svoboda, Petr']]],
+            $this->client->buildQuery('name = ?', [['Novák, Jan', 'Svoboda, Petr']]),
+        );
+    }
+
+
     public function testCrossFieldsValueContainingInKeywordIsParsedAsCrossFields(): void
     {
         self::assertSame(

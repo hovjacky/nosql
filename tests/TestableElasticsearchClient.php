@@ -23,6 +23,6 @@ final class TestableElasticsearchClient extends ElasticsearchClient
      */
     public function buildQuery(string $condition, ?array $values = null): array
     {
-        return $this->parseBooleanQuery($this->putValuesIntoQuery($condition, $values));
+        return $this->parseWhereCondition($condition, $values);
     }
 }

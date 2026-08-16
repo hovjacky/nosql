@@ -67,8 +67,9 @@ abstract class DBWithBooleanParsing extends DB
                 }
 
                 // Závorky nejsou v hodnotách povoleny, odstraníme je...
+                // Znak `~` je povolen, protože se používá jako escape znak LIKE podmínek (klauzule ESCAPE).
                 /** @var string $replace */
-                $replace = preg_replace('/[^\p{L}\p{N}\-_@., :\+\[\]%]/u', '', $replace);
+                $replace = preg_replace('/[^\p{L}\p{N}\-_@., :\+\[\]%~]/u', '', $replace);
 
                 $condition = (string) preg_replace($from, $replace, $condition, 1);
             }

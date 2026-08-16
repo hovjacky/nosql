@@ -20,11 +20,16 @@
     "autoload": {
         "psr-4": { "Hovjacky\\NoSQL\\": "src" }
     },
+    "autoload-dev": {
+        "psr-4": { "Hovjacky\\NoSQL\\Tests\\": "tests" }
+    },
     "require-dev": {
         "roave/security-advisories": "dev-latest",
-        "phpstan/phpstan": "^2.0"
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^11.5"
     },
     "scripts": {
-        "phpstan": "vendor/bin/phpstan analyse -c phpstan.neon --memory-limit=256M"
+        "phpstan": "vendor/bin/phpstan analyse -c phpstan.neon --memory-limit=256M",
+        "test": "vendor/bin/phpunit"
     }
 }

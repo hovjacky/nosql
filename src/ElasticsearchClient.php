@@ -860,19 +860,9 @@ class ElasticsearchClient extends DBWithBooleanParsing
             $val = trim(substr($expr, $pos + 1));
 
             // Je možné zde dát pole, zadané takto [self::PARAM_WHERE]['sloupec = ?'] = [1, 2, 3];
-            if (($start = strpos($val, '[')) !== false && ($end = strpos($val, ']')) !== false && $start < $end)
+            if (($listValue = $this->parseListValue($val)) !== null)
             {
-                $val = explode(',', substr($val, $start + 1, $end - 1));
-
-                foreach ($val as $key => $item)
-                {
-                    if ((int) $item == $item)
-                    {
-                        $val[$key] = (int) $item;
-                    }
-                }
-
-                $result['terms'][trim(substr($expr, 0, $pos))] = $val;
+                $result['terms'][trim(substr($expr, 0, $pos))] = $listValue;
             }
             else
             {
@@ -882,17 +872,37 @@ class ElasticsearchClient extends DBWithBooleanParsing
             return $result;
         }
 
-        if (($pos = strpos($expr, ' LIKE ')) !== false)
+        if (($pos = mb_strpos($expr, ' NOT LIKE ')) !== false)
         {
-            $val = trim(mb_substr($expr, $pos + 6));
+            return $this->parseLikeExpression(
+                field: trim(mb_substr($expr, 0, $pos)),
+                value: trim(mb_substr($expr, $pos + 10)),
+                negated: true,
+            );
+        }
 
-            if ($this->wildcardValueFilter !== null)
-            {
-                $val = call_user_func($this->wildcardValueFilter, $val);
-            }
+        if (($pos = mb_strpos($expr, ' LIKE ')) !== false)
+        {
+            return $this->parseLikeExpression(
+                field: trim(mb_substr($expr, 0, $pos)),
+                value: trim(mb_substr($expr, $pos + 6)),
+            );
+        }
 
-            $result['wildcard'][trim(mb_substr($expr, 0, $pos))] = mb_strtolower(
-                (string) mb_ereg_replace('%', '*', $val),
+        // Kontrola na IN musí být až za LIKE - hodnota LIKE je volný text a může obsahovat ` IN `.
+        if (($pos = mb_strpos($expr, ' NOT IN ')) !== false)
+        {
+            $result['bool']['must_not']['terms'][trim(mb_substr($expr, 0, $pos))] = $this->parseRequiredListValue(
+                trim(mb_substr($expr, $pos + 8)),
+            );
+
+            return $result;
+        }
+
+        if (($pos = mb_strpos($expr, ' IN ')) !== false)
+        {
+            $result['terms'][trim(mb_substr($expr, 0, $pos))] = $this->parseRequiredListValue(
+                trim(mb_substr($expr, $pos + 4)),
             );
 
             return $result;
@@ -928,6 +938,145 @@ class ElasticsearchClient extends DBWithBooleanParsing
         }
 
         throw new DBException('No expression matched.');
+    }
+
+
+    /**
+     * Rozparsuje seznam hodnot ve formátu `[a,b,c]`.
+     * Vrací null, pokud hodnota není seznam.
+     * @return list<int|string>|null
+     */
+    private function parseListValue(string $value): ?array
+    {
+        if (($start = strpos($value, '[')) === false || ($end = strpos($value, ']')) === false || $start >= $end)
+        {
+            return null;
+        }
+
+        $items = explode(',', substr($value, $start + 1, $end - 1));
+
+        foreach ($items as $key => $item)
+        {
+            if ((int) $item == $item)
+            {
+                $items[$key] = (int) $item;
+            }
+        }
+
+        return $items;
+    }
+
+
+    /**
+     * Rozparsuje seznam hodnot ve formátu `[a,b,c]` (např. pro podmínku IN).
+     * @return list<int|string>
+     * @throws DBException
+     */
+    private function parseRequiredListValue(string $value): array
+    {
+        $listValue = $this->parseListValue($value);
+
+        if ($listValue === null)
+        {
+            throw new DBException("Hodnota podmínky IN musí být seznam hodnot, zadáno: `$value`.");
+        }
+
+        return $listValue;
+    }
+
+
+    /**
+     * Rozparsuje LIKE výraz (včetně volitelné klauzule ESCAPE) na wildcard query.
+     * Escape znak se načítá z klauzule `ESCAPE 'x'`, pokud je definována.
+     * @return array<string, mixed>
+     */
+    private function parseLikeExpression(string $field, string $value, bool $negated = false): array
+    {
+        // Volitelná klauzule ESCAPE - z ní se načte escape znak.
+        $escapeChar = null;
+
+        if (preg_match("/\s+ESCAPE\s+'(?<char>.)'$/u", $value, $matches) === 1)
+        {
+            $escapeChar = $matches['char'];
+            $value = trim((string) preg_replace("/\s+ESCAPE\s+'.'$/u", '', $value));
+        }
+
+        // Hodnota může být SQL literál v uvozovkách (např. `col LIKE ''` nebo `col LIKE '%abc%'`).
+        if (mb_strlen($value) >= 2 && str_starts_with($value, "'") && str_ends_with($value, "'"))
+        {
+            $value = mb_substr($value, 1, mb_strlen($value) - 2);
+        }
+
+        if ($this->wildcardValueFilter !== null)
+        {
+            $value = call_user_func($this->wildcardValueFilter, $value);
+        }
+
+        $wildcard = mb_strtolower($this->translateLikeToWildcard($value, $escapeChar));
+
+        if ($negated)
+        {
+            $result['bool']['must_not']['wildcard'][$field] = $wildcard;
+        }
+        else
+        {
+            $result['wildcard'][$field] = $wildcard;
+        }
+
+        return $result;
+    }
+
+
+    /**
+     * Převede SQL LIKE pattern na Elasticsearch wildcard pattern.
+     * S definovaným escape znakem se uplatňuje plná SQL LIKE sémantika:
+     * `%` -> `*`, `_` -> `?`, escapované znaky jsou literály a wildcard znaky
+     * Elasticsearch (`*`, `?`, `\`) se v literálech escapují.
+     * Bez escape znaku zůstává zachováno původní chování (pouze převod `%` na `*`).
+     */
+    private function translateLikeToWildcard(string $value, ?string $escapeChar): string
+    {
+        if ($escapeChar === null)
+        {
+            return (string) mb_ereg_replace('%', '*', $value);
+        }
+
+        $result = '';
+        $chars = mb_str_split($value);
+        $count = count($chars);
+
+        for ($i = 0; $i < $count; $i++)
+        {
+            $char = $chars[$i];
+
+            // Escapovaný znak je vždy literál.
+            if ($char === $escapeChar && $i + 1 < $count)
+            {
+                $result .= $this->escapeWildcardCharacter($chars[++$i]);
+
+                continue;
+            }
+
+            $result .= match ($char)
+            {
+                '%' => '*',
+                '_' => '?',
+                default => $this->escapeWildcardCharacter($char),
+            };
+        }
+
+        return $result;
+    }
+
+
+    /**
+     * Escapuje znak, který má ve wildcard pattern Elasticsearch speciální význam.
+     */
+    private function escapeWildcardCharacter(string $char): string
+    {
+        return in_array($char, ['*', '?', '\\'], true)
+            ? '\\' . $char
+            : $char;
     }
 
 

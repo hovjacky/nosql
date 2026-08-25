@@ -7,6 +7,7 @@ use Hovjacky\NoSQL\Query\FindByParams;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use Throwable;
 
 abstract class DB implements DBInterface, LoggerAwareInterface
 {
@@ -66,6 +67,27 @@ abstract class DB implements DBInterface, LoggerAwareInterface
     protected function getLogger(): LoggerInterface
     {
         return $this->logger ??= (TracyLogger::isAvailable() ? new TracyLogger() : new NullLogger());
+    }
+
+
+    /**
+     * Zaznamená chybu do loggeru.
+     *
+     * Selhání logování se úmyslně polyká: logger je jen vedlejší kanál a nesmí zastínit
+     * chybu, kvůli které se loguje (Tracy např. bez nastaveného adresáře pro logy vyhazuje
+     * LogicException a ta by nahradila původní DBException).
+     * @param mixed[] $context
+     */
+    protected function logError(string $message, array $context = []): void
+    {
+        try
+        {
+            $this->getLogger()->error($message, $context);
+        }
+        catch(Throwable)
+        {
+            // S nefunkčním loggerem se nedá nic dělat.
+        }
     }
 
 

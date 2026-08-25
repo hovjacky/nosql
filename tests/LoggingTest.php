@@ -2,6 +2,7 @@
 
 namespace Hovjacky\NoSQL\Tests;
 
+use Hovjacky\NoSQL\DB;
 use Hovjacky\NoSQL\DBException;
 use Hovjacky\NoSQL\Logging\TracyLogger;
 use PHPUnit\Framework\TestCase;
@@ -83,5 +84,21 @@ final class LoggingTest extends TestCase
     public function testExplicitLoggerWinsOverDefault(): void
     {
         self::assertSame($this->logger, $this->client->exposeLogger());
+    }
+
+
+    /**
+     * Selhání logování nesmí zastínit chybu, kvůli které se loguje.
+     * Tracy bez nastaveného adresáře pro logy vyhazuje LogicException.
+     */
+    public function testFailingLoggerDoesNotMaskTheRealException(): void
+    {
+        $client = new TestableElasticsearchClient();
+        $client->setLogger(new ThrowingLogger());
+
+        $this->expectException(DBException::class);
+        $this->expectExceptionMessage(DB::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
+
+        $client->buildQuery('id = ?', [1, 2]);
     }
 }

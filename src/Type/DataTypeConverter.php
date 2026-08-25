@@ -14,10 +14,14 @@ use Throwable;
 final class DataTypeConverter
 {
     /** Samotné datum, např. `2024-01-31`. */
-    private const DATE_PATTERN = '/[1-2][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]/';
+    private const DATE_PATTERN = '/^[1-2][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]$/';
 
-    /** Datum s časem, např. `2024-01-31T12:00`. */
-    private const DATE_TIME_PATTERN = '/[1-2][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]/';
+    /**
+     * Datum s časem, např. `2024-01-31T12:00` nebo `2024-01-31T12:00:00+01:00`.
+     * Vzor je ukotvený - text, který datum jen obsahuje (poznámka, popis), není datum.
+     */
+    private const DATE_TIME_PATTERN = '/^[1-2][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]'
+        . 'T[0-2][0-9]:[0-5][0-9](:[0-5][0-9](\.[0-9]+)?)?(Z|[+-][0-2][0-9]:?[0-5][0-9])?$/';
 
 
     /**
@@ -69,7 +73,7 @@ final class DataTypeConverter
 
     private static function looksLikeDate(string $value): bool
     {
-        return (strlen($value) === 10 && preg_match(self::DATE_PATTERN, $value) === 1)
+        return preg_match(self::DATE_PATTERN, $value) === 1
             || preg_match(self::DATE_TIME_PATTERN, $value) === 1;
     }
 }

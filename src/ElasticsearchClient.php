@@ -119,7 +119,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
         if ($response['result'] !== 'created' && $response['result'] !== 'updated')
         {
-            $this->getLogger()->error('Elasticsearch nevrátil po zápisu záznamu očekávaný výsledek.', ['response' => $response]);
+            $this->logError('Elasticsearch nevrátil po zápisu záznamu očekávaný výsledek.', ['response' => $response]);
 
             return false;
         }
@@ -171,7 +171,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
         {
             if (!empty($responses['items']))
             {
-                $this->getLogger()->error('Chyby při hromadném zápisu do Elasticsearch.', ['items' => $responses['items']]);
+                $this->logError('Chyby při hromadném zápisu do Elasticsearch.', ['items' => $responses['items']]);
             }
 
             throw new DBException(self::ERROR_BULK_INSERT_ERROR);
@@ -516,40 +516,183 @@ class ElasticsearchClient extends DBWithBooleanParsing
     }
 
 
-    protected function parseAndOrQuery(string $query): array
+    /**
+     * Operátory výrazů v pořadí, ve kterém se hledají. POŘADÍ JE VÝZNAMNÉ:
+     *  - delší operátory musí být před svými předponami (`<=` před `<`),
+     *  - `IN` je až úplně poslední, protože hodnoty LIKE a CROSS FIELDS jsou volný
+     *    text a mohou samy obsahovat ` IN `; podmínka IN naopak žádný z operátorů
+     *    nad sebou obsahovat nemůže.
+     * @var list<array{string, string}> operátor -> metoda, která ho přeloží
+     */
+    private const EXPRESSION_OPERATORS = [
+        ['<=', 'parseRangeExpression'],
+        ['>=', 'parseRangeExpression'],
+        ['!=', 'parseNotEqualExpression'],
+        ['<', 'parseRangeExpression'],
+        ['>', 'parseRangeExpression'],
+        ['=', 'parseEqualExpression'],
+        [' NOT LIKE ', 'parseNotLikeExpression'],
+        [' LIKE ', 'parseLikeOperator'],
+        [' IS NULL', 'parseIsNullExpression'],
+        [' IS NOT NULL', 'parseIsNotNullExpression'],
+        [' CROSS FIELDS ', 'parseCrossFieldsExpression'],
+        [' NOT IN ', 'parseNotInExpression'],
+        [' IN ', 'parseInExpression'],
+    ];
+
+
+    /** Elasticsearch klauzule pro jednotlivé porovnávací operátory. */
+    private const RANGE_CLAUSES = [
+        '<=' => 'lte',
+        '>=' => 'gte',
+        '<' => 'lt',
+        '>' => 'gt',
+    ];
+
+
+    /**
+     * @return array<string, mixed>
+     * @throws DBException
+     */
+    protected function parseExpression(string $expr): array
     {
-        $ands = explode(' OR ', $query);
-
-        $result = [];
-
-        foreach ($ands as $and)
+        foreach (self::EXPRESSION_OPERATORS as [$operator, $method])
         {
-            $exprs = explode(' AND ', $and);
+            $pos = mb_strpos($expr, $operator);
 
-            if (count($exprs) === 1 && count($ands) === 1)
+            if ($pos !== false)
             {
-                $result = $this->parseExpression($exprs[0]);
-
-                break;
-            }
-
-            $partialResult = [];
-
-            foreach ($exprs as $expr)
-            {
-                $partialResult[] = $this->parseExpression($expr);
-            }
-
-            /** @noinspection NotOptimalIfConditionsInspection */
-            if (count($ands) === 1)
-            {
-                $result['bool']['filter'] = $partialResult;
-            }
-            else
-            {
-                $result['bool']['should'][]['bool']['filter'] = $partialResult;
+                return $this->{$method}($expr, $pos, $operator);
             }
         }
+
+        throw new DBException('No expression matched.');
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseRangeExpression(string $expr, int $pos, string $operator): array
+    {
+        $result = [];
+        $result['bool']['filter'][]['range'][self::fieldBefore($expr, $pos)][self::RANGE_CLAUSES[$operator]]
+            = $this->normalizeValue(self::valueAfter($expr, $pos, $operator));
+
+        return $result;
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseNotEqualExpression(string $expr, int $pos, string $operator): array
+    {
+        $result = [];
+        $result['bool']['must_not']['match'][self::fieldBefore($expr, $pos)]
+            = $this->normalizeValue(self::valueAfter($expr, $pos, $operator));
+
+        return $result;
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseEqualExpression(string $expr, int $pos, string $operator): array
+    {
+        $value = self::valueAfter($expr, $pos, $operator);
+        $field = self::fieldBefore($expr, $pos);
+        $result = [];
+
+        // Je možné zde dát pole, zadané takto [self::PARAM_WHERE]['sloupec = ?'] = [1, 2, 3];
+        if (($listValue = $this->parseListValue($value)) !== null)
+        {
+            $result['terms'][$field] = $listValue;
+        }
+        else
+        {
+            $result['match'][$field] = $this->normalizeValue($value);
+        }
+
+        return $result;
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseNotLikeExpression(string $expr, int $pos, string $operator): array
+    {
+        return $this->parseLikeExpression(
+            field: self::fieldBefore($expr, $pos),
+            value: self::valueAfter($expr, $pos, $operator),
+            negated: true,
+        );
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseLikeOperator(string $expr, int $pos, string $operator): array
+    {
+        return $this->parseLikeExpression(
+            field: self::fieldBefore($expr, $pos),
+            value: self::valueAfter($expr, $pos, $operator),
+        );
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseIsNullExpression(string $expr, int $pos, string $operator): array
+    {
+        $result = [];
+        $result['bool']['must_not']['exists']['field'] = self::fieldBefore($expr, $pos);
+
+        return $result;
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseIsNotNullExpression(string $expr, int $pos, string $operator): array
+    {
+        $result = [];
+        $result['exists']['field'] = self::fieldBefore($expr, $pos);
+
+        return $result;
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseCrossFieldsExpression(string $expr, int $pos, string $operator): array
+    {
+        return [
+            'multi_match' => [
+                'query' => self::valueAfter($expr, $pos, $operator),
+                'type' => 'cross_fields',
+                'operator' => 'and',
+                'fields' => explode(',', self::fieldBefore($expr, $pos)),
+            ],
+        ];
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     * @throws DBException
+     */
+    private function parseNotInExpression(string $expr, int $pos, string $operator): array
+    {
+        $result = [];
+        $result['bool']['must_not']['terms'][self::fieldBefore($expr, $pos)]
+            = $this->parseRequiredListValue(self::valueAfter($expr, $pos, $operator));
 
         return $result;
     }
@@ -559,133 +702,31 @@ class ElasticsearchClient extends DBWithBooleanParsing
      * @return array<string, mixed>
      * @throws DBException
      */
-    protected function parseExpression(string $expr): array
+    private function parseInExpression(string $expr, int $pos, string $operator): array
     {
-        if (($pos = strpos($expr, '<=')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 2));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['lte'] = $this->normalizeValue($val);
+        $result = [];
+        $result['terms'][self::fieldBefore($expr, $pos)]
+            = $this->parseRequiredListValue(self::valueAfter($expr, $pos, $operator));
 
-            return $result;
-        }
+        return $result;
+    }
 
-        if (($pos = strpos($expr, '>=')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 2));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['gte'] = $this->normalizeValue($val);
 
-            return $result;
-        }
+    /**
+     * Název sloupce, tedy část výrazu před operátorem.
+     */
+    private static function fieldBefore(string $expr, int $pos): string
+    {
+        return trim(mb_substr($expr, 0, $pos));
+    }
 
-        if (($pos = strpos($expr, '!=')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 2));
-            $result['bool']['must_not']['match'][trim(substr($expr, 0, $pos))] = $this->normalizeValue($val);
 
-            return $result;
-        }
-
-        if (($pos = strpos($expr, '<')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 1));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['lt'] = $this->normalizeValue($val);
-
-            return $result;
-        }
-
-        if (($pos = strpos($expr, '>')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 1));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['gt'] = $this->normalizeValue($val);
-
-            return $result;
-        }
-
-        if (($pos = strpos($expr, '=')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 1));
-
-            // Je možné zde dát pole, zadané takto [self::PARAM_WHERE]['sloupec = ?'] = [1, 2, 3];
-            if (($listValue = $this->parseListValue($val)) !== null)
-            {
-                $result['terms'][trim(substr($expr, 0, $pos))] = $listValue;
-            }
-            else
-            {
-                $result['match'][trim(substr($expr, 0, $pos))] = $this->normalizeValue($val);
-            }
-
-            return $result;
-        }
-
-        if (($pos = mb_strpos($expr, ' NOT LIKE ')) !== false)
-        {
-            return $this->parseLikeExpression(
-                field: trim(mb_substr($expr, 0, $pos)),
-                value: trim(mb_substr($expr, $pos + 10)),
-                negated: true,
-            );
-        }
-
-        if (($pos = mb_strpos($expr, ' LIKE ')) !== false)
-        {
-            return $this->parseLikeExpression(
-                field: trim(mb_substr($expr, 0, $pos)),
-                value: trim(mb_substr($expr, $pos + 6)),
-            );
-        }
-
-        if (($pos = strpos($expr, ' IS NULL')) !== false)
-        {
-            $result['bool']['must_not']['exists']['field'] = trim(mb_substr($expr, 0, $pos));
-
-            return $result;
-        }
-
-        if (($pos = strpos($expr, ' IS NOT NULL')) !== false)
-        {
-            $result['exists']['field'] = trim(mb_substr($expr, 0, $pos));
-
-            return $result;
-        }
-
-        if (($pos = strpos($expr, ' CROSS FIELDS ')) !== false)
-        {
-            $fields = trim(mb_substr($expr, 0, $pos));
-            $val = trim(substr($expr, $pos + 14));
-
-            $result['multi_match'] = [
-                'query' => $val,
-                'type' => 'cross_fields',
-                'operator' => 'and',
-                'fields' => explode(',', $fields),
-            ];
-
-            return $result;
-        }
-
-        // Kontrola na IN musí být až jako poslední - hodnoty LIKE a CROSS FIELDS
-        // jsou volný text a mohou obsahovat ` IN `. Podmínka IN naopak nemůže
-        // obsahovat žádný z výše kontrolovaných operátorů ani klíčových slov.
-        if (($pos = mb_strpos($expr, ' NOT IN ')) !== false)
-        {
-            $result['bool']['must_not']['terms'][trim(mb_substr($expr, 0, $pos))] = $this->parseRequiredListValue(
-                trim(mb_substr($expr, $pos + 8)),
-            );
-
-            return $result;
-        }
-
-        if (($pos = mb_strpos($expr, ' IN ')) !== false)
-        {
-            $result['terms'][trim(mb_substr($expr, 0, $pos))] = $this->parseRequiredListValue(
-                trim(mb_substr($expr, $pos + 4)),
-            );
-
-            return $result;
-        }
-
-        throw new DBException('No expression matched.');
+    /**
+     * Hodnota, tedy část výrazu za operátorem.
+     */
+    private static function valueAfter(string $expr, int $pos, string $operator): string
+    {
+        return trim(mb_substr($expr, $pos + mb_strlen($operator)));
     }
 
 

@@ -71,6 +71,24 @@ abstract class DB implements DBInterface, LoggerAwareInterface
 
 
     /**
+     * Vrátí počet záznamů odpovídajících daným kritériím.
+     *
+     * Potomci s vlastní optimalizací počítání si ji přepíšou (viz ElasticsearchClient).
+     * @param array<string, mixed> $params
+     * @return int Počet nalezených záznamů
+     * @throws Throwable
+     */
+    public function count(string $tableName, array $params = []): int
+    {
+        $params[self::PARAM_COUNT] = true;
+
+        $result = $this->findBy($tableName, $params);
+
+        return is_int($result) ? $result : count($result);
+    }
+
+
+    /**
      * Zaznamená chybu do loggeru.
      *
      * Selhání logování se úmyslně polyká: logger je jen vedlejší kanál a nesmí zastínit

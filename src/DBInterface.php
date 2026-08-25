@@ -38,45 +38,45 @@ interface DBInterface
     /**
      * Přečte záznam z tabulky.
      * @param string $tableName
-     * @param int $id
+     * @param string|int $id
      * @return array<string, mixed>|null Vrací nalezený záznam nebo null
      * @throws Throwable
      */
-    public function get(string $tableName, int $id): ?array;
+    public function get(string $tableName, string|int $id): ?array;
 
 
     /**
      * Upraví záznam v tabulce.
      * @param string $tableName
-     * @param int $id
+     * @param string|int $id
      * @param array<string, mixed> $data Sloupec -> hodnota
      * @return bool Vrací, zda byl záznam upraven
      * @throws Throwable
      */
-    public function update(string $tableName, int $id, array $data): bool;
+    public function update(string $tableName, string|int $id, array $data): bool;
 
 
     /**
      * Smaže záznam z tabulky.
      * @param string $tableName
-     * @param int $id
+     * @param string|int $id
      * @return bool true pokud byl záznam smazán, jinak vyhodí výjimku
      * @throws Throwable
      */
-    public function delete(string $tableName, int $id): bool;
+    public function delete(string $tableName, string|int $id): bool;
 
 
     /**
-     * Smaže všechny záznamy z tabulky.
+     * Smaže všechny záznamy z tabulky. Při neúspěchu vyhodí výjimku.
      * @param string $tableName
-     * @return true true pokud byl záznam smazán, jinak vyhodí výjimku
      * @throws Throwable
      */
-    public function deleteAll(string $tableName): true;
+    public function deleteAll(string $tableName): void;
 
 
     /**
      * Vrátí záznamy odpovídající daným kritériím.
+     * Pro samotný počet záznamů je jednodušší count(), která vrací rovnou int.
      * @param string $tableName
      * @param array<string, mixed> $params
      * @return array<int, array<string, mixed>>|int Nalezené záznamy nebo počet nalezených záznamů

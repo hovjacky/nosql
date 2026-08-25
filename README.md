@@ -11,7 +11,7 @@ The recommended way is via Composer:
 ```
 composer require hovjacky/nosql
 ```
-It requires PHP version 7.0 and higher.
+It requires PHP 8.2 or higher and the `mbstring` extension.
 
 Usage
 -----
@@ -21,15 +21,36 @@ Connection parameters (host, port, index) have to be passed as an array to the c
 
 The following methods are supported:
 
-+ insert - array `$data`
-+ bulkInsert - array `$data`
-+ get - int `$id`
-+ update - int `$id`, array `$data`
-+ delete - int `$id`
++ insertOrUpdate - array `$data`
++ bulkInsertOrUpdate - array `$data`
++ get - string|int `$id`
++ update - string|int `$id`, array `$data`
++ delete - string|int `$id`
 + deleteAll
 + findBy - array `$params` - details described below.
++ search - array `$params` - like findBy, but returns a `SearchResult` object.
++ count - array `$params` - number of matching records, always an `int`.
 
-All have `table` as first parameter (in Elasticsearch it is the type name).
+All have `table` as first parameter (in Elasticsearch it is the index name).
+
+#### search and count
+
+`findBy` returns either rows or a number depending on the `count` parameter. When you want
+one specific thing, the typed methods are clearer:
+
+```php
+$result = $client->search('people', ['where' => ['age > ?' => 18], 'limit' => 10]);
+
+$result->rows;        // array of matching records
+$result->total;       // total number of matches reported by Elasticsearch (may be null)
+$result->response;    // raw Elasticsearch response
+$result->first();     // first record or null
+foreach ($result as $row) { ... }
+
+$howMany = $client->count('people', ['where' => ['age > ?' => 18]]);
+```
+
+`search` always returns records - a `count` parameter passed to it is ignored.
 
 ####Method findBy
 Method findBy can be used for search. It supports quite a wide range of parameters
@@ -41,7 +62,8 @@ Method findBy can be used for search. It supports quite a wide range of paramete
 + count - only get number of results
 + orderBy - array of fields to order by, e.g. `['id', 'name']`, descendant order is marked by
 lowercase desc - `['id desc', 'name']` (`ORDER BY id DESC, name`)
-+ groupBy - array of fields to group by, e.g. `['id', 'name']` (`GROUP BY id, name`)
++ groupBy - **a single** field name to group by, e.g. `'name'` (`GROUP BY name`).
+Grouping by several fields at once is not supported.
     + Elasticsearch only:
         + groupByScript - instead of a field name, `groupBy` can contain the word `script`
         and `groupByScript` can then contain an elasticsearch script
@@ -76,3 +98,23 @@ dependency, no longer a required one - install it explicitly if you rely on that
 
 All exceptions thrown by the library implement `Hovjacky\NoSQL\NoSQLException`, so
 `catch (NoSQLException $e)` covers both `DBException` and `NotImplementedException`.
+
+Upgrading
+---------
+
+Breaking changes that need a major version bump:
+
++ `deleteAll()` now returns `void` instead of `true`. Code doing `if ($db->deleteAll($t))`
+must be rewritten - the method throws on failure, so a plain call is enough.
++ `DBInterface::get()`, `update()` and `delete()` now declare `string|int $id` instead of
+`int $id`, matching what `ElasticsearchClient` already accepted. Implementations of the
+interface that declare `int $id` must widen the type.
++ A malformed `where` condition (a dangling `AND`/`OR`, empty parentheses) now throws
+`DBException`. It used to silently build a nonsensical query.
++ Strings that merely *contain* something date-shaped are no longer converted to `DateTime`;
+only values that are entirely a date or a date with time are.
+
+Deprecated, still working:
+
++ The `$resultData` reference parameter of `findBy()`. Use `search()`, which returns the raw
+response as part of `SearchResult`.

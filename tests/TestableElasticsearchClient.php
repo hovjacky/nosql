@@ -3,6 +3,7 @@
 namespace Hovjacky\NoSQL\Tests;
 
 use Hovjacky\NoSQL\ElasticsearchClient;
+use Hovjacky\NoSQL\Query\FindByParams;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -46,5 +47,41 @@ final class TestableElasticsearchClient extends ElasticsearchClient
     public function repairParams(array $params): array
     {
         return $this->checkAndRepairParams($params);
+    }
+
+
+    /** @var mixed[] odpověď, kterou klient „dostane“ z Elasticsearch */
+    public array $fakeResponse = [];
+
+    public int $fakeCount = 0;
+
+    /** @var array<string, mixed>|null poslední sestavený dotaz */
+    public ?array $lastRequest = null;
+
+
+    /**
+     * @return mixed[]
+     */
+    protected function executeSearch(
+        string $tableName,
+        FindByParams $params,
+        ?callable $modifyParamsCallback,
+    ): array
+    {
+        $this->lastRequest = ['index' => $tableName];
+
+        return $this->fakeResponse;
+    }
+
+
+    protected function executeCount(
+        string $tableName,
+        FindByParams $params,
+        ?callable $modifyParamsCallback,
+    ): int
+    {
+        $this->lastRequest = ['index' => $tableName];
+
+        return $this->fakeCount;
     }
 }

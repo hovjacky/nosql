@@ -9,6 +9,7 @@ use Elastic\Elasticsearch\Exception\ClientResponseException;
 use Elastic\Elasticsearch\Response\Elasticsearch;
 use Hovjacky\NoSQL\Query\FindByParams;
 use Hovjacky\NoSQL\Query\SearchRequestBuilder;
+use Hovjacky\NoSQL\Query\SearchResult;
 use Hovjacky\NoSQL\Query\SearchResultMapper;
 use Hovjacky\NoSQL\Type\DataTypeConverter;
 use Http\Promise\Promise;
@@ -308,7 +309,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
      * Smazání všech záznamů z elasticsearch.
      * @throws DBException
      */
-    public function deleteAll(string $tableName): true
+    public function deleteAll(string $tableName): void
     {
         $params = [
             'index' => $tableName,
@@ -323,8 +324,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
         ];
 
         $this->client->deleteByQuery($params);
-
-        return true;
     }
 
 
@@ -390,7 +389,10 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
 
     /**
+     * Vrátí záznamy odpovídající daným kritériím, nebo jejich počet (s parametrem `count`).
+     *
      * @param array<mixed>|null $resultData Surová odpověď z Elasticsearch (předává se referencí).
+     *      @deprecated Použijte search(), která vrací SearchResult i se surovou odpovědí.
      * @throws DBException
      * @throws Throwable
      */
@@ -402,41 +404,120 @@ class ElasticsearchClient extends DBWithBooleanParsing
     ): array|int
     {
         $findByParams = FindByParams::fromArray($this->checkAndRepairParams($params));
-        $whereCompiler = $this->createWhereCompiler();
 
         // Počet záznamů bez GROUP BY umí Elasticsearch vrátit rovnou přes `_count`.
         if ($findByParams->count && $findByParams->groupBy === null)
         {
-            $request = $this->getRequestBuilder()->buildCountRequest($tableName, $findByParams, $whereCompiler);
-
-            try
-            {
-                $response = $this->responseToArray(
-                    $this->client->count($this->modifyRequest($request, $modifyParamsCallback)),
-                );
-
-                return $response[self::PARAM_COUNT];
-            }
-            catch(Throwable $e)
-            {
-                $this->handleException($e);
-            }
+            return $this->executeCount($tableName, $findByParams, $modifyParamsCallback);
         }
 
-        $request = $this->getRequestBuilder()->build($tableName, $findByParams, $whereCompiler);
+        $resultData = $response = $this->executeSearch($tableName, $findByParams, $modifyParamsCallback);
+
+        return $this->getResultMapper()->map($response, $findByParams, $this->convertFromDBDataTypes(...));
+    }
+
+
+    /**
+     * Vyhledá záznamy a vrátí je i se surovou odpovědí z Elasticsearch.
+     *
+     * Na rozdíl od findBy() vrací vždy záznamy - parametr `count` se ignoruje,
+     * od zjišťování počtu je metoda count().
+     * @param array<string, mixed> $params
+     * @throws DBException
+     * @throws Throwable
+     */
+    public function search(string $tableName, array $params, ?callable $modifyParamsCallback = null): SearchResult
+    {
+        unset($params[self::PARAM_COUNT]);
+
+        $findByParams = FindByParams::fromArray($this->checkAndRepairParams($params));
+        $response = $this->executeSearch($tableName, $findByParams, $modifyParamsCallback);
+        $rows = $this->getResultMapper()->map($response, $findByParams, $this->convertFromDBDataTypes(...));
+
+        return new SearchResult(is_array($rows) ? $rows : [], self::totalHits($response), $response);
+    }
+
+
+    /**
+     * Vrátí počet záznamů odpovídajících daným kritériím.
+     * @param array<string, mixed> $params
+     * @throws DBException
+     * @throws Throwable
+     */
+    public function count(string $tableName, array $params = [], ?callable $modifyParamsCallback = null): int
+    {
+        $params[self::PARAM_COUNT] = true;
+
+        $result = $this->findBy($tableName, $params, $modifyParamsCallback);
+
+        return is_int($result) ? $result : count($result);
+    }
+
+
+    /**
+     * Chráněné, aby šlo odesílání dotazu obejít (testy, dekorátory nad klientem).
+     * @throws DBException
+     * @throws Throwable
+     */
+    protected function executeCount(
+        string $tableName,
+        FindByParams $params,
+        ?callable $modifyParamsCallback,
+    ): int
+    {
+        $request = $this->getRequestBuilder()->buildCountRequest($tableName, $params, $this->createWhereCompiler());
 
         try
         {
-            $resultData = $response = $this->responseToArray(
-                $this->client->search($this->modifyRequest($request, $modifyParamsCallback)),
+            $response = $this->responseToArray(
+                $this->client->count($this->modifyRequest($request, $modifyParamsCallback)),
             );
 
-            return $this->getResultMapper()->map($response, $findByParams, $this->convertFromDBDataTypes(...));
+            return (int) $response[self::PARAM_COUNT];
         }
         catch(Throwable $e)
         {
             $this->handleException($e);
         }
+    }
+
+
+    /**
+     * Odešle dotaz do Elasticsearch a vrátí surovou odpověď.
+     * @return mixed[]
+     * @throws DBException
+     * @throws Throwable
+     */
+    protected function executeSearch(
+        string $tableName,
+        FindByParams $params,
+        ?callable $modifyParamsCallback,
+    ): array
+    {
+        $request = $this->getRequestBuilder()->build($tableName, $params, $this->createWhereCompiler());
+
+        try
+        {
+            return $this->responseToArray(
+                $this->client->search($this->modifyRequest($request, $modifyParamsCallback)),
+            );
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
+        }
+    }
+
+
+    /**
+     * Celkový počet odpovídajících záznamů z odpovědi, pokud ho Elasticsearch uvedl.
+     * @phpstan-ignore missingType.iterableValue
+     */
+    private static function totalHits(array $response): ?int
+    {
+        $total = $response['hits']['total']['value'] ?? null;
+
+        return is_int($total) ? $total : null;
     }
 
 

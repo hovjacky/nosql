@@ -24,6 +24,7 @@ abstract class DB implements DBInterface, LoggerAwareInterface
     public const ERROR_DB_DOESNT_EXIST = 'Databáze/index neexistuje.';
     public const ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS = 'Rozdílný počet `?` a hodnot v dotazu.';
     public const ERROR_BOOLEAN_WRONG_NUMBER_OF_PARENTHESES = 'Špatný počet závorek v dotazu.';
+    public const ERROR_BOOLEAN_RESERVED_SEQUENCE = 'Podmínka nesmí obsahovat sekvenci `#číslo#`, ta je vyhrazená pro hodnoty.';
 
     // Názvy parametrů metody findBy().
     public const PARAM_FIELDS = 'fields';

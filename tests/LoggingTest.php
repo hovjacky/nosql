@@ -61,7 +61,8 @@ final class LoggingTest extends TestCase
         self::assertCount(1, $this->logger->records);
         self::assertSame(LogLevel::ERROR, $this->logger->records[0]['level']);
         self::assertSame('Too many questionmarks in condition.', $this->logger->records[0]['message']);
-        self::assertSame('id = 1 AND name = ?', $this->logger->records[0]['context']['condition']);
+        // Do textu podmínky se vkládají značky, ne hodnoty.
+        self::assertSame('id = #0# AND name = ?', $this->logger->records[0]['context']['condition']);
     }
 
 

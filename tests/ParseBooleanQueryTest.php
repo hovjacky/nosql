@@ -160,10 +160,14 @@ final class ParseBooleanQueryTest extends TestCase
     }
 
 
-    public function testValueSanitizationStripsForbiddenCharacters(): void
+    /**
+     * Hodnoty se do textu podmínky nevkládají, takže se z nich nic neořezává.
+     * Dřív se ze `J(o)h<n>='` stalo `John`, protože závorky a operátory rozbíjely parsování.
+     */
+    public function testValueWithSpecialCharactersIsKeptWhole(): void
     {
         self::assertSame(
-            ['match' => ['name' => 'John']],
+            ['match' => ['name' => 'J(o)h<n>=\'']],
             $this->client->buildQuery('name = ?', ['J(o)h<n>=\'']),
         );
     }

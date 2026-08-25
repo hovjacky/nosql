@@ -74,6 +74,11 @@ Grouping by several fields at once is not supported.
 and values are names of fields the aggregations should apply to, e.g.
 `['min' => ['id', 'age'], 'avg' => ['age']]` (`SELECT MIN(id), MIN(age), AVG(age) FROM`)
 + where - an associative array, keys are conditions with placeholders (?) and values are values.
+Values are never inserted into the condition text - the text keeps a marker and the value is
+passed alongside it. A value can therefore contain anything (`AND`, brackets, quotes, newlines)
+without breaking the query, and it keeps the type you passed: `['age = ?' => 30]` sends the
+number `30`, `['age = ?' => '30']` sends the string `"30"`. Values written directly into the
+condition (`['age = 30' => null]`) have no type, so they are still guessed from the notation.
 Conditions accept operators =, !=, >, <, >=, <=, LIKE, IS NULL, IS NOT NULL, CROSS FIELDS.
     + LIKE - the value should contain % (the same as in SQL)
     + = - the value can be an array, e.g. `['id = ?' => [1, 3, 7]]` (`id IN (1, 3, 7)`)
@@ -104,6 +109,15 @@ Upgrading
 
 Breaking changes that need a major version bump:
 
++ Values passed to `where` are no longer stripped of "unsafe" characters. Previously
+`['name = ?' => "J(o)h<n>='"]` searched for `John`; now it searches for the whole value.
+If you relied on that stripping, sanitize the value yourself before passing it.
++ Values keep the type you pass them. A numeric string used to be turned into a number
+(`'30'` became `30`); it now stays `'30'`. Elasticsearch coerces either way, so this only
+matters if you inspect the generated query.
++ A `where` condition may no longer contain the sequence `#number#`, which is reserved for
+value markers. Conditions without values are unaffected.
+
 + `deleteAll()` now returns `void` instead of `true`. Code doing `if ($db->deleteAll($t))`
 must be rewritten - the method throws on failure, so a plain call is enough.
 + `DBInterface::get()`, `update()` and `delete()` now declare `string|int $id` instead of
@@ -118,3 +132,14 @@ Deprecated, still working:
 
 + The `$resultData` reference parameter of `findBy()`. Use `search()`, which returns the raw
 response as part of `SearchResult`.
+
+Fixed along the way:
+
++ A value containing ` AND `, ` OR ` or brackets used to throw `No expression matched.` or
+silently produce a wrong query. Such values now work.
++ `['name = ?' => '[not a list]']` used to be misread as a list of values; it is now a string.
++ A boolean `false` used to be sent as an empty string.
+
+If you extend `DBWithBooleanParsing` yourself, note that `putValuesIntoQuery()` changed
+signature - it no longer takes `$putPlaceholdersForDate` and always binds every value:
+`putValuesIntoQuery(string $condition, ?array $values, array &$boundValues): string`.

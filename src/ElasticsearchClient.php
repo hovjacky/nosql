@@ -23,8 +23,8 @@ class ElasticsearchClient extends DBWithBooleanParsing
     /** @var callable(string $value): string|null */
     private $wildcardValueFilter = null;
 
-    /** @var array<string, mixed[]> hodnoty seznamů právě parsované where podmínky (klíč = placeholder `#n#`) */
-    private array $listPlaceholders = [];
+    /** @var array<string, mixed> hodnoty právě parsované where podmínky (klíč = značka `#n#`) */
+    private array $boundValues = [];
 
     private ?SearchRequestBuilder $requestBuilder = null;
 
@@ -658,7 +658,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
     {
         $result = [];
         $result['bool']['filter'][]['range'][self::fieldBefore($expr, $pos)][self::RANGE_CLAUSES[$operator]]
-            = $this->normalizeValue(self::valueAfter($expr, $pos, $operator));
+            = $this->resolveValue(self::valueAfter($expr, $pos, $operator));
 
         return $result;
     }
@@ -671,7 +671,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
     {
         $result = [];
         $result['bool']['must_not']['match'][self::fieldBefore($expr, $pos)]
-            = $this->normalizeValue(self::valueAfter($expr, $pos, $operator));
+            = $this->resolveValue(self::valueAfter($expr, $pos, $operator));
 
         return $result;
     }
@@ -687,13 +687,13 @@ class ElasticsearchClient extends DBWithBooleanParsing
         $result = [];
 
         // Je možné zde dát pole, zadané takto [self::PARAM_WHERE]['sloupec = ?'] = [1, 2, 3];
-        if (($listValue = $this->parseListValue($value)) !== null)
+        if (($listValue = $this->resolveListValue($value)) !== null)
         {
             $result['terms'][$field] = $listValue;
         }
         else
         {
-            $result['match'][$field] = $this->normalizeValue($value);
+            $result['match'][$field] = $this->resolveValue($value);
         }
 
         return $result;
@@ -756,7 +756,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
     {
         return [
             'multi_match' => [
-                'query' => self::valueAfter($expr, $pos, $operator),
+                'query' => (string) $this->resolveValue(self::valueAfter($expr, $pos, $operator)),
                 'type' => 'cross_fields',
                 'operator' => 'and',
                 'fields' => explode(',', self::fieldBefore($expr, $pos)),
@@ -773,7 +773,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
     {
         $result = [];
         $result['bool']['must_not']['terms'][self::fieldBefore($expr, $pos)]
-            = $this->parseRequiredListValue(self::valueAfter($expr, $pos, $operator));
+            = $this->resolveRequiredListValue(self::valueAfter($expr, $pos, $operator));
 
         return $result;
     }
@@ -787,7 +787,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
     {
         $result = [];
         $result['terms'][self::fieldBefore($expr, $pos)]
-            = $this->parseRequiredListValue(self::valueAfter($expr, $pos, $operator));
+            = $this->resolveRequiredListValue(self::valueAfter($expr, $pos, $operator));
 
         return $result;
     }
@@ -813,43 +813,104 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Rozparsuje where podmínku s hodnotami na Elasticsearch query.
-     * Seznamy hodnot se do podmínky vkládají jako placeholdery, skutečné hodnoty
-     * se předávají bokem (viz parseListValue).
+     * Hodnoty se do textu podmínky nevkládají, jen se na ně odkazuje značkou (viz resolveValue).
      * @param mixed[]|null $values
      * @return array<string, mixed>
      * @throws DBException
      */
     protected function parseWhereCondition(string $condition, ?array $values): array
     {
-        $this->listPlaceholders = [];
+        $this->boundValues = [];
 
-        return $this->parseBooleanQuery(
-            $this->putValuesIntoQuery($condition, $values, placeholders: $this->listPlaceholders),
-        );
+        return $this->parseBooleanQuery($this->putValuesIntoQuery($condition, $values, $this->boundValues));
     }
 
 
     /**
-     * Rozparsuje seznam hodnot ve formátu `[a,b,c]`.
-     * Vrací null, pokud hodnota není seznam.
+     * Vrátí hodnotu, na kterou se text odkazuje.
+     *
+     * Značka `#n#` se nahradí předanou hodnotou včetně jejího typu. Text napsaný přímo
+     * v podmínce (např. `age > 18`) žádný typ nemá, ten se odhaduje podle zápisu.
+     */
+    private function resolveValue(string $text): mixed
+    {
+        return $this->isBoundValue($text) ? $this->boundValues[$text] : $this->normalizeValue($text);
+    }
+
+
+    /**
+     * Vrátí seznam hodnot, na který se text odkazuje, nebo null, pokud to seznam není.
+     * @return list<mixed>|null
+     */
+    private function resolveListValue(string $text): ?array
+    {
+        if ($this->isBoundValue($text))
+        {
+            $value = $this->boundValues[$text];
+
+            return is_array($value) ? array_values($value) : null;
+        }
+
+        return self::parseInlineList($text);
+    }
+
+
+    /**
+     * @return list<mixed>
+     * @throws DBException
+     */
+    private function resolveRequiredListValue(string $text): array
+    {
+        $list = $this->resolveListValue($text);
+
+        if ($list === null)
+        {
+            throw new DBException(
+                'Hodnota podmínky IN musí být seznam hodnot, zadáno: `' . $this->describeValue($text) . '`.',
+            );
+        }
+
+        return $list;
+    }
+
+
+    private function isBoundValue(string $text): bool
+    {
+        return self::isValueToken($text) && array_key_exists($text, $this->boundValues);
+    }
+
+
+    /**
+     * Popis hodnoty pro chybovou hlášku - u značky nemá smysl vypisovat ji samotnou.
+     */
+    private function describeValue(string $text): string
+    {
+        if (!$this->isBoundValue($text))
+        {
+            return $text;
+        }
+
+        $value = $this->boundValues[$text];
+
+        return is_scalar($value)
+            ? get_debug_type($value) . ' ' . var_export($value, true)
+            : get_debug_type($value);
+    }
+
+
+    /**
+     * Rozparsuje seznam zapsaný přímo v podmínce, tedy `[a,b,c]`.
+     * Vrací null, pokud text seznam není.
      * @return list<int|string>|null
      */
-    private function parseListValue(string $value): ?array
+    private static function parseInlineList(string $text): ?array
     {
-        if (($start = strpos($value, '[')) === false || ($end = strpos($value, ']')) === false || $start >= $end)
+        if (($start = strpos($text, '[')) === false || ($end = strpos($text, ']')) === false || $start >= $end)
         {
             return null;
         }
 
-        $content = substr($value, $start + 1, $end - $start - 1);
-
-        // Seznam předaný jako hodnota placeholderu - vracíme původní hodnoty beze změny.
-        if (preg_match('/^#\d+#$/', $content) === 1 && isset($this->listPlaceholders[$content]))
-        {
-            return array_values($this->listPlaceholders[$content]);
-        }
-
-        $items = explode(',', $content);
+        $items = explode(',', substr($text, $start + 1, $end - $start - 1));
 
         foreach ($items as $key => $item)
         {
@@ -860,24 +921,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
         }
 
         return $items;
-    }
-
-
-    /**
-     * Rozparsuje seznam hodnot ve formátu `[a,b,c]` (např. pro podmínku IN).
-     * @return list<int|string>
-     * @throws DBException
-     */
-    private function parseRequiredListValue(string $value): array
-    {
-        $listValue = $this->parseListValue($value);
-
-        if ($listValue === null)
-        {
-            throw new DBException("Hodnota podmínky IN musí být seznam hodnot, zadáno: `$value`.");
-        }
-
-        return $listValue;
     }
 
 
@@ -897,8 +940,12 @@ class ElasticsearchClient extends DBWithBooleanParsing
             $value = trim((string) preg_replace("/\s+ESCAPE\s+'.'$/u", '', $value));
         }
 
+        if ($this->isBoundValue($value))
+        {
+            $value = (string) $this->boundValues[$value];
+        }
         // Hodnota může být SQL literál v uvozovkách (např. `col LIKE ''` nebo `col LIKE '%abc%'`).
-        if (mb_strlen($value) >= 2 && str_starts_with($value, "'") && str_ends_with($value, "'"))
+        elseif (mb_strlen($value) >= 2 && str_starts_with($value, "'") && str_ends_with($value, "'"))
         {
             $value = mb_substr($value, 1, mb_strlen($value) - 2);
         }

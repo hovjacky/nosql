@@ -13,66 +13,50 @@ use Hovjacky\NoSQL\Query\Parser\Tokenizer;
 abstract class DBWithBooleanParsing extends DB
 {
     /**
-     * Vloží hodnoty do dotazu místo `?`.
-     * @param string $condition
+     * Nahradí `?` v podmínce zástupnými značkami a skutečné hodnoty odloží bokem.
+     *
+     * Hodnoty se do textu dotazu nevkládají vůbec. Text tak obsahuje jen to, co napsal
+     * vývojář, a hodnota nemůže rozbít parsování ani kdyby obsahovala `AND`, závorku
+     * nebo apostrof. Zároveň se nemusí nijak ořezávat a zachovává si původní typ.
+     *
      * @param mixed[]|null $values Seznam hodnot.
-     * @param bool $putPlaceholdersForDate Mají se místo datumu vložit placeholdery? Nutné např. pro MongoDB.
-     * @param array<string, mixed> $placeholders Pole pro uložení placeholderů a k nim patřícím datumům.
-     * @return string
+     * @param array<string, mixed> $boundValues Sem se uloží značka -> hodnota.
      * @throws DBException
      */
-    protected function putValuesIntoQuery(
-        string $condition,
-        ?array $values,
-        bool $putPlaceholdersForDate = false,
-        array &$placeholders = [],
-    ): string
+    protected function putValuesIntoQuery(string $condition, ?array $values, array &$boundValues): string
     {
-        $placeholdersCount = count($placeholders);
+        $index = count($boundValues);
 
-        if (isset($values))
+        // Značky si generujeme sami, v zadané podmínce nemají co dělat - text napsaný
+        // vývojářem by se jinak mohl vydávat za hodnotu. Bez hodnot žádné značky
+        // nevznikají, takže tam není co zaměnit a kontrolovat se nemusí.
+        if ($index === 0 && !empty($values) && preg_match('/#\d+#/', $condition) === 1)
         {
-            $from = '/' . preg_quote('?', '/') . '/';
+            throw new DBException(self::ERROR_BOOLEAN_RESERVED_SEQUENCE);
+        }
 
-            foreach ($values as $value)
+        foreach ($values ?? [] as $value)
+        {
+            if (!str_contains($condition, '?'))
             {
-                if (!str_contains($condition, '?'))
-                {
-                    $this->logError('Too few questionmarks in condition.', [
-                        'condition' => $condition,
-                        'values' => $values,
-                    ]);
+                $this->logError('Too few questionmarks in condition.', [
+                    'condition' => $condition,
+                    'values' => $values,
+                ]);
 
-                    throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
-                }
-
-                // Hodnotou může být i pole hodnot - do dotazu se vloží jako placeholder `[#n#]`
-                // a skutečné hodnoty se předají bokem v poli $placeholders. Hodnoty seznamu tak
-                // nepodléhají textové serializaci ani sanitizaci a zachovají si původní typy.
-                if (is_array($value))
-                {
-                    $replace = '[#' . $placeholdersCount . '#]';
-                    $placeholders['#' . $placeholdersCount++ . '#'] = $value;
-                }
-                elseif ($putPlaceholdersForDate && $value instanceof DateTimeInterface)
-                {
-                    // Místo data dáme placeholder a datum uložíme do pole $placeholders
-                    $replace = '#' . $placeholdersCount++ . '#';
-                    $placeholders[$replace] = $value;
-                }
-                elseif (is_scalar($value))
-                {
-                    // Závorky nejsou v hodnotách povoleny, odstraníme je...
-                    // Znak `~` je povolen, protože se používá jako escape znak LIKE podmínek (klauzule ESCAPE).
-                    $replace = (string) preg_replace('/[^\p{L}\p{N}\-_@., :\+\[\]%~]/u', '', (string) $value);
-                }
-                else
-                {
-                    throw new DBException('Hodnota filtru musí být převeditelná na textový řetězec');
-                }
-
-                $condition = (string) preg_replace($from, $replace, $condition, 1);
+                throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
             }
+
+            if (!is_scalar($value) && !is_array($value) && !$value instanceof DateTimeInterface)
+            {
+                throw new DBException('Hodnotou filtru nemůže být ' . get_debug_type($value) . '.');
+            }
+
+            $token = self::valueToken($index++);
+            $boundValues[$token] = $value;
+
+            // Nahrazujeme značkou, ne hodnotou, takže se v ní nemůže nic interpretovat.
+            $condition = (string) preg_replace('/\?/', $token, $condition, 1);
         }
 
         if (str_contains($condition, '?'))
@@ -86,6 +70,24 @@ abstract class DBWithBooleanParsing extends DB
         }
 
         return $condition;
+    }
+
+
+    /**
+     * Značka zastupující hodnotu v textu podmínky.
+     */
+    protected static function valueToken(int $index): string
+    {
+        return '#' . $index . '#';
+    }
+
+
+    /**
+     * Je tenhle text značkou zastupující hodnotu?
+     */
+    protected static function isValueToken(string $text): bool
+    {
+        return preg_match('/^#\d+#$/', $text) === 1;
     }
 
 

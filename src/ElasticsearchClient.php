@@ -2,11 +2,14 @@
 
 namespace Hovjacky\NoSQL;
 
-use DateTime;
+use Closure;
 use Elastic\Elasticsearch\Client;
 use Elastic\Elasticsearch\ClientBuilder;
 use Elastic\Elasticsearch\Exception\ClientResponseException;
 use Elastic\Elasticsearch\Response\Elasticsearch;
+use Hovjacky\NoSQL\Query\SearchRequestBuilder;
+use Hovjacky\NoSQL\Query\SearchResultMapper;
+use Hovjacky\NoSQL\Type\DataTypeConverter;
 use Http\Promise\Promise;
 use Throwable;
 use stdClass;
@@ -20,6 +23,12 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /** @var array<string, mixed[]> hodnoty seznamů právě parsované where podmínky (klíč = placeholder `#n#`) */
     private array $listPlaceholders = [];
+
+    private ?SearchRequestBuilder $requestBuilder = null;
+
+    private ?SearchResultMapper $resultMapper = null;
+
+    private ?DataTypeConverter $dataTypeConverter = null;
 
 
     /** Výchozí limit vrácených položek z elasticu. */
@@ -392,193 +401,20 @@ class ElasticsearchClient extends DBWithBooleanParsing
     ): array|int
     {
         $params = $this->checkAndRepairParams($params);
+        $whereCompiler = $this->createWhereCompiler();
 
-        $paramsES = [
-            'index' => $tableName,
-            'body' => [],
-        ];
-
-        if (is_array($params[self::PARAM_FIELDS] ?? null) && !empty($params[self::PARAM_FIELDS]))
-        {
-            $paramsES['_source_includes'] = implode(',', $params[self::PARAM_FIELDS]);
-        }
-
-        if (is_array($params[self::PARAM_WHERE] ?? null) && !empty($params[self::PARAM_WHERE]))
-        {
-            $conditions = [];
-
-            foreach ($params[self::PARAM_WHERE] as $condition => $values)
-            {
-                $parsedBooleanQuery = $this->parseWhereCondition($condition, $this->convertToDBDataTypes($values));
-
-                if (count($params[self::PARAM_WHERE]) === 1)
-                {
-                    $conditions = $parsedBooleanQuery;
-
-                    break;
-                }
-
-                $conditions['bool']['filter'][] = $parsedBooleanQuery;
-            }
-
-            $paramsES['body']['query'] = $conditions;
-        }
-
-        if (!empty($params[self::PARAM_LIMIT]))
-        {
-            /** @noinspection NotOptimalIfConditionsInspection */
-            if (empty($params[self::PARAM_GROUP_BY]))
-            {
-                $paramsES['body']['size'] = $params[self::PARAM_LIMIT];
-
-                if (!empty($params[self::PARAM_OFFSET]))
-                {
-                    $paramsES['body']['from'] = $params[self::PARAM_OFFSET];
-                }
-            }
-            else
-            {
-                $limit = $params[self::PARAM_LIMIT];
-
-                if (!empty($params[self::PARAM_OFFSET]))
-                {
-                    $limit += $params[self::PARAM_OFFSET];
-                }
-
-                $paramsES['body']['aggs']['group_by']['terms']['size'] = $limit;
-            }
-        }
-        elseif (!empty($params[self::PARAM_GROUP_BY]))
-        {
-            // Aggregation - nechceme normální výsledky
-            $paramsES['body']['size'] = 0;
-            $paramsES['body']['aggs']['group_by']['terms']['size'] = self::DEFAULT_LIMIT;
-        }
-        elseif (empty($params[self::PARAM_COUNT]))
-        {
-            // Default limit
-            $paramsES['body']['size'] = self::DEFAULT_LIMIT;
-        }
-
-        if (
-            !empty($params[self::PARAM_ORDER_BY])
-            && is_array($params[self::PARAM_ORDER_BY] ?? null)
-            && empty($params[self::PARAM_GROUP_BY])
-            && empty($params[self::PARAM_AGGREGATION])
-        )
-        {
-            foreach ($params[self::PARAM_ORDER_BY] as $column)
-            {
-                $desc = strpos($column, ' desc');
-
-                if ($desc !== false)
-                {
-                    $column = substr($column, 0, $desc);
-                }
-
-                $paramsES['body']['sort'][] = [$column => ($desc !== false ? 'desc' : 'asc')];
-            }
-
-            $paramsES['body']['sort'][] = '_score';
-        }
-
-        if (!empty($params[self::PARAM_GROUP_BY]))
-        {
-            // Je možné v groupBy uvést "script" a definovat skript v groupByScript
-            if ($params[self::PARAM_GROUP_BY] !== 'script' || empty($params[self::PARAM_GROUP_BY_SCRIPT]))
-            {
-                $paramsES['body']['aggs']['group_by']['terms']['field'] = $params[self::PARAM_GROUP_BY];
-            }
-            else
-            {
-                $paramsES['body']['aggs']['group_by']['terms']['script'] = $params[self::PARAM_GROUP_BY_SCRIPT];
-            }
-            if (is_array($params[self::PARAM_ORDER_BY] ?? null) && !empty($params[self::PARAM_ORDER_BY]))
-            {
-                $paramsES['body']['aggs']['group_by']['aggs']['results']['top_hits']['size'] = 1;
-
-                if (!empty($params[self::PARAM_FIELDS]))
-                {
-                    // Chceme vrátit jen požadovaná pole
-                    $paramsES['body']['aggs']['group_by']['aggs']['results']['top_hits']['_source']['includes'] = $params[self::PARAM_FIELDS];
-                }
-
-                foreach ($params[self::PARAM_ORDER_BY] as $column)
-                {
-                    $desc = strpos($column, ' desc');
-
-                    if ($desc !== false)
-                    {
-                        $column = substr($column, 0, $desc);
-                    }
-
-                    $paramsES['body']['aggs']['group_by']['terms']['order'][] = [($column === $params[self::PARAM_GROUP_BY] ? '_key' : ($column === self::PARAM_COUNT ? '_count' : $column)) => ($desc !== false ? 'desc' : 'asc')];
-
-                    // Musí se přidat agregace podle sloupce, podle kterého chceme řadit
-                    if ($column !== $params[self::PARAM_GROUP_BY] && $column !== self::PARAM_COUNT)
-                    {
-                        $paramsES['body']['aggs']['group_by']['aggs'][$column][$desc !== false ? 'max' : 'min']['field'] = $column;
-                    }
-                }
-
-                // Vnitřní řazení v GROUP BY buckets (jaký záznam ze skupiny chceme)
-                if (
-                    is_array($params[self::PARAM_GROUP_INTERNAL_ORDER_BY] ?? null)
-                    && !empty($params[self::PARAM_GROUP_INTERNAL_ORDER_BY])
-                )
-                {
-                    foreach ($params[self::PARAM_GROUP_INTERNAL_ORDER_BY] as $column)
-                    {
-                        $desc = strpos($column, ' desc');
-
-                        if ($desc !== false)
-                        {
-                            $column = substr($column, 0, $desc);
-                        }
-
-                        $paramsES['body']['aggs']['group_by']['aggs']['results']['top_hits']['sort'][] = [$column => ['order' => $desc !== false ? 'desc' : 'asc']];
-                    }
-                }
-            }
-        }
-
-        if (is_array($params[self::PARAM_AGGREGATION] ?? null) && !empty($params[self::PARAM_AGGREGATION]))
-        {
-            foreach ($params[self::PARAM_AGGREGATION] as $agg => $columns)
-            {
-                if (!is_array($columns))
-                {
-                    $columns = [$columns];
-                }
-
-                if (empty($params[self::PARAM_GROUP_BY]))
-                {
-                    foreach ($columns as $column)
-                    {
-                        $paramsES['body']['aggs']["{$agg}_{$column}"][$agg] = ['field' => $column];
-                    }
-                }
-                else
-                {
-                    foreach ($columns as $column)
-                    {
-                        $paramsES['body']['aggs']['group_by']['aggs']["{$agg}_{$column}"][$agg] = ['field' => $column];
-                    }
-                }
-            }
-        }
-
+        // Počet záznamů bez GROUP BY umí Elasticsearch vrátit rovnou přes `_count`.
         if (!empty($params[self::PARAM_COUNT]) && empty($params[self::PARAM_GROUP_BY]))
         {
+            $request = $this->getRequestBuilder()->buildCountRequest($tableName, $params, $whereCompiler);
+
             try
             {
-                unset($paramsES['body']['size']);
+                $response = $this->responseToArray(
+                    $this->client->count($this->modifyRequest($request, $modifyParamsCallback)),
+                );
 
-                $results = $this->responseToArray($this->client->count(
-                    $modifyParamsCallback !== null ? $modifyParamsCallback($paramsES) : $paramsES,
-                ));
-
-                return $results[self::PARAM_COUNT];
+                return $response[self::PARAM_COUNT];
             }
             catch(Throwable $e)
             {
@@ -586,109 +422,15 @@ class ElasticsearchClient extends DBWithBooleanParsing
             }
         }
 
+        $request = $this->getRequestBuilder()->build($tableName, $params, $whereCompiler);
+
         try
         {
-            $resultData = $results = $this->responseToArray($this->client->search(
-                $modifyParamsCallback !== null ? $modifyParamsCallback($paramsES) : $paramsES,
-            ));
+            $resultData = $response = $this->responseToArray(
+                $this->client->search($this->modifyRequest($request, $modifyParamsCallback)),
+            );
 
-            $finalResults = [];
-
-            if (!empty($params[self::PARAM_GROUP_BY]))
-            {
-                $buckets = $results['aggregations']['group_by']['buckets'];
-
-                // Pokud zjišťujeme pouze počet záznamů, zajímá nás počet buckets
-                if (!empty($params[self::PARAM_COUNT]))
-                {
-                    return count($buckets);
-                }
-
-                foreach ($buckets as $bucket)
-                {
-                    if (!empty($bucket['results']))
-                    {
-                        // @phpstan-ignore-next-line
-                        if (self::DEFAULT_GROUP_LIMIT !== 1)
-                        {
-                            throw new NotImplementedException(
-                                'Vracení jiného počtu výsledků než 1 pro skupinu (v GROUP BY) je třeba doimplementovat.',
-                            );
-                        }
-
-                        // Výsledky s top_hits
-                        $result = $bucket['results']['hits']['hits'][0]['_source'];
-                    }
-                    else
-                    {
-                        $result = [$params[self::PARAM_GROUP_BY] => $bucket['key'], 'count' => $bucket['doc_count']];
-                    }
-
-                    /** @noinspection NotOptimalIfConditionsInspection */
-                    if (is_array($params[self::PARAM_AGGREGATION] ?? null) && !empty($params[self::PARAM_AGGREGATION]))
-                    {
-                        foreach ($params[self::PARAM_AGGREGATION] as $agg => $columns)
-                        {
-                            if (!is_array($columns))
-                            {
-                                $columns = [$columns];
-                            }
-                            foreach ($columns as $column)
-                            {
-                                $result["{$agg}_{$column}"] = $bucket["{$agg}_{$column}"]['value'];
-                            }
-                        }
-                    }
-
-                    $result[self::PARAM_BUCKET] = $bucket;
-
-                    $finalResults[] = $this->convertFromDBDataTypes($result);
-                }
-
-                if (!empty($params[self::PARAM_OFFSET]) && is_numeric($params[self::PARAM_OFFSET]))
-                {
-                    $finalResults = array_slice($finalResults, (int) $params[self::PARAM_OFFSET]);
-                }
-            }
-            elseif (is_array($params[self::PARAM_AGGREGATION] ?? null) && !empty($params[self::PARAM_AGGREGATION]))
-            {
-                $result = [];
-
-                foreach ($params[self::PARAM_AGGREGATION] as $agg => $columns)
-                {
-                    if (!is_array($columns))
-                    {
-                        $columns = [$columns];
-                    }
-                    foreach ($columns as $column)
-                    {
-                        $result["{$agg}_{$column}"] = $results['aggregations']["{$agg}_{$column}"]['value'];
-                    }
-                }
-
-                $finalResults[] = $this->convertFromDBDataTypes($result);
-            }
-            else
-            {
-                foreach ($results['hits']['hits'] as $result)
-                {
-                    $row = $result['_source'];
-
-                    if (
-                        is_array($params[self::PARAM_FIELDS] ?? null)
-                        && !empty($params[self::PARAM_FIELDS])
-                        && in_array('id', $params[self::PARAM_FIELDS])
-                    )
-                    {
-                        /** @noinspection SlowArrayOperationsInLoopInspection */
-                        $row = array_merge(['id' => $result['_id']], $row);
-                    }
-
-                    $finalResults[] = $this->convertFromDBDataTypes($row);
-                }
-            }
-
-            return $finalResults;
+            return $this->getResultMapper()->map($response, $params, $this->convertFromDBDataTypes(...));
         }
         catch(Throwable $e)
         {
@@ -697,21 +439,52 @@ class ElasticsearchClient extends DBWithBooleanParsing
     }
 
 
+    /**
+     * Přeloží jednu where podmínku na Elasticsearch query.
+     * Konverze hodnot jde přes convertToDBDataTypes(), aby ji šlo v potomcích přepsat.
+     * @return Closure(string, mixed[]|null): array<string, mixed>
+     */
+    private function createWhereCompiler(): Closure
+    {
+        return fn (string $condition, ?array $values): array => $this->parseWhereCondition(
+            $condition,
+            $values !== null ? $this->convertToDBDataTypes($values) : null,
+        );
+    }
+
+
+    /**
+     * Dá volajícímu možnost sáhnout si na hotový dotaz před odesláním.
+     * @param array<string, mixed> $request
+     * @return array<string, mixed>
+     */
+    private function modifyRequest(array $request, ?callable $modifyParamsCallback): array
+    {
+        return $modifyParamsCallback !== null ? $modifyParamsCallback($request) : $request;
+    }
+
+
+    private function getRequestBuilder(): SearchRequestBuilder
+    {
+        return $this->requestBuilder ??= new SearchRequestBuilder(self::DEFAULT_LIMIT);
+    }
+
+
+    private function getResultMapper(): SearchResultMapper
+    {
+        return $this->resultMapper ??= new SearchResultMapper(self::PARAM_BUCKET, self::DEFAULT_GROUP_LIMIT);
+    }
+
+
+    private function getDataTypeConverter(): DataTypeConverter
+    {
+        return $this->dataTypeConverter ??= new DataTypeConverter();
+    }
+
+
     public function convertToDBDataTypes(array $data): array
     {
-        foreach ($data as $key => $value)
-        {
-            if ($value instanceof DateTime)
-            {
-                $data[$key] = $value->format('c');
-            }
-            elseif (is_array($value))
-            {
-                $data[$key] = $this->convertToDBDataTypes($value);
-            }
-        }
-
-        return $data;
+        return $this->getDataTypeConverter()->toDatabase($data);
     }
 
 
@@ -720,27 +493,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
      */
     public function convertFromDBDataTypes(array $data): array
     {
-        foreach ($data as $key => $value)
-        {
-            if (is_array($value))
-            {
-                $data[$key] = $this->convertFromDBDataTypes($value);
-            }
-            // Konverze na DateTime
-            elseif (
-                is_string($value)
-                && ((
-                        strlen($value) === 10
-                        && preg_match('/[1-2][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]/', $value) === 1
-                    )
-                    || preg_match('/[1-2][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]/', $value) === 1
-                ))
-            {
-                $data[$key] = new DateTime($value);
-            }
-        }
-
-        return $data;
+        return $this->getDataTypeConverter()->fromDatabase($data);
     }
 
 

@@ -1,0 +1,616 @@
+{
+    "plain": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "fields": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        },
+        "_source_includes": "id,name"
+    },
+    "limit": {
+        "index": "mytable",
+        "body": {
+            "size": 10
+        }
+    },
+    "limit_offset": {
+        "index": "mytable",
+        "body": {
+            "size": 10,
+            "from": 5
+        }
+    },
+    "offset_only": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "count": {
+        "index": "mytable",
+        "body": []
+    },
+    "count_limit": {
+        "index": "mytable",
+        "body": []
+    },
+    "order_single": {
+        "index": "mytable",
+        "body": {
+            "size": 100,
+            "sort": [
+                {
+                    "id": "asc"
+                },
+                "_score"
+            ]
+        }
+    },
+    "order_desc": {
+        "index": "mytable",
+        "body": {
+            "size": 100,
+            "sort": [
+                {
+                    "id": "desc"
+                },
+                {
+                    "name": "asc"
+                },
+                "_score"
+            ]
+        }
+    },
+    "order_scalar": {
+        "index": "mytable",
+        "body": {
+            "size": 100,
+            "sort": [
+                {
+                    "id": "desc"
+                },
+                "_score"
+            ]
+        }
+    },
+    "order_with_count": {
+        "index": "mytable",
+        "body": []
+    },
+    "group": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "name"
+                    }
+                }
+            }
+        }
+    },
+    "group_limit": {
+        "index": "mytable",
+        "body": {
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 10,
+                        "field": "name"
+                    }
+                }
+            }
+        }
+    },
+    "group_limit_offset": {
+        "index": "mytable",
+        "body": {
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 13,
+                        "field": "name"
+                    }
+                }
+            }
+        }
+    },
+    "group_order": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "name",
+                        "order": [
+                            {
+                                "_key": "desc"
+                            }
+                        ]
+                    },
+                    "aggs": {
+                        "results": {
+                            "top_hits": {
+                                "size": 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "group_order_count": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "name",
+                        "order": [
+                            {
+                                "_count": "desc"
+                            }
+                        ]
+                    },
+                    "aggs": {
+                        "results": {
+                            "top_hits": {
+                                "size": 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "group_order_other": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "name",
+                        "order": [
+                            {
+                                "age": "desc"
+                            },
+                            {
+                                "id": "asc"
+                            }
+                        ]
+                    },
+                    "aggs": {
+                        "results": {
+                            "top_hits": {
+                                "size": 1
+                            }
+                        },
+                        "age": {
+                            "max": {
+                                "field": "age"
+                            }
+                        },
+                        "id": {
+                            "min": {
+                                "field": "id"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "group_order_fields": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "name",
+                        "order": [
+                            {
+                                "age": "asc"
+                            }
+                        ]
+                    },
+                    "aggs": {
+                        "results": {
+                            "top_hits": {
+                                "size": 1,
+                                "_source": {
+                                    "includes": [
+                                        "id",
+                                        "age"
+                                    ]
+                                }
+                            }
+                        },
+                        "age": {
+                            "min": {
+                                "field": "age"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "_source_includes": "id,age"
+    },
+    "group_internal": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "name",
+                        "order": [
+                            {
+                                "age": "asc"
+                            }
+                        ]
+                    },
+                    "aggs": {
+                        "results": {
+                            "top_hits": {
+                                "size": 1,
+                                "sort": [
+                                    {
+                                        "id": {
+                                            "order": "desc"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        "age": {
+                            "min": {
+                                "field": "age"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "group_internal_scalar": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "name",
+                        "order": [
+                            {
+                                "age": "asc"
+                            }
+                        ]
+                    },
+                    "aggs": {
+                        "results": {
+                            "top_hits": {
+                                "size": 1,
+                                "sort": [
+                                    {
+                                        "id": {
+                                            "order": "desc"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        "age": {
+                            "min": {
+                                "field": "age"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "group_script": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "script": "doc['a'].value"
+                    }
+                }
+            }
+        }
+    },
+    "group_script_noscript": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "script"
+                    }
+                }
+            }
+        }
+    },
+    "agg": {
+        "index": "mytable",
+        "body": {
+            "size": 100,
+            "aggs": {
+                "min_id": {
+                    "min": {
+                        "field": "id"
+                    }
+                },
+                "min_age": {
+                    "min": {
+                        "field": "age"
+                    }
+                },
+                "avg_age": {
+                    "avg": {
+                        "field": "age"
+                    }
+                }
+            }
+        }
+    },
+    "agg_scalar": {
+        "index": "mytable",
+        "body": {
+            "size": 100,
+            "aggs": {
+                "max_age": {
+                    "max": {
+                        "field": "age"
+                    }
+                }
+            }
+        }
+    },
+    "agg_group": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "name"
+                    },
+                    "aggs": {
+                        "min_age": {
+                            "min": {
+                                "field": "age"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "agg_order": {
+        "index": "mytable",
+        "body": {
+            "size": 100,
+            "aggs": {
+                "min_age": {
+                    "min": {
+                        "field": "age"
+                    }
+                }
+            }
+        }
+    },
+    "where_one": {
+        "index": "mytable",
+        "body": {
+            "query": {
+                "match": {
+                    "id": 5
+                }
+            },
+            "size": 100
+        }
+    },
+    "where_two": {
+        "index": "mytable",
+        "body": {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {
+                            "match": {
+                                "id": 5
+                            }
+                        },
+                        {
+                            "wildcard": {
+                                "name": "jan*"
+                            }
+                        }
+                    ]
+                }
+            },
+            "size": 100
+        }
+    },
+    "where_list": {
+        "index": "mytable",
+        "body": {
+            "query": {
+                "terms": {
+                    "id": [
+                        1,
+                        2,
+                        3
+                    ]
+                }
+            },
+            "size": 100
+        }
+    },
+    "where_in": {
+        "index": "mytable",
+        "body": {
+            "query": {
+                "terms": {
+                    "id": [
+                        1,
+                        2,
+                        3
+                    ]
+                }
+            },
+            "size": 100
+        }
+    },
+    "where_date": {
+        "index": "mytable",
+        "body": {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {
+                            "range": {
+                                "created": {
+                                    "gte": "2024-01-31T12:00:00+00:00"
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            "size": 100
+        }
+    },
+    "where_bool": {
+        "index": "mytable",
+        "body": {
+            "query": {
+                "bool": {
+                    "should": [
+                        {
+                            "bool": {
+                                "filter": [
+                                    {
+                                        "match": {
+                                            "a": 1
+                                        }
+                                    },
+                                    {
+                                        "match": {
+                                            "b": 2
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "match": {
+                                "c": 3
+                            }
+                        }
+                    ]
+                }
+            },
+            "size": 100
+        }
+    },
+    "where_isnull": {
+        "index": "mytable",
+        "body": {
+            "query": {
+                "bool": {
+                    "must_not": {
+                        "exists": {
+                            "field": "name"
+                        }
+                    }
+                }
+            },
+            "size": 100
+        }
+    },
+    "where_count": {
+        "index": "mytable",
+        "body": {
+            "query": {
+                "match": {
+                    "id": 5
+                }
+            }
+        }
+    },
+    "where_group_agg": {
+        "index": "mytable",
+        "body": {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {
+                            "range": {
+                                "id": {
+                                    "gt": 1
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 9,
+                        "field": "name",
+                        "order": [
+                            {
+                                "age": "desc"
+                            }
+                        ]
+                    },
+                    "aggs": {
+                        "results": {
+                            "top_hits": {
+                                "size": 1
+                            }
+                        },
+                        "age": {
+                            "max": {
+                                "field": "age"
+                            }
+                        },
+                        "max_age": {
+                            "max": {
+                                "field": "age"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

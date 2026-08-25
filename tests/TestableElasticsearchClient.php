@@ -36,4 +36,15 @@ final class TestableElasticsearchClient extends ElasticsearchClient
     {
         return $this->getLogger();
     }
+
+
+    /**
+     * Zpřístupní kontrolu a normalizaci parametrů findBy().
+     * @param array<string, mixed> $params
+     * @return array<string, mixed>
+     */
+    public function repairParams(array $params): array
+    {
+        return $this->checkAndRepairParams($params);
+    }
 }

@@ -57,3 +57,22 @@ Conditions accept operators =, !=, >, <, >=, <=, LIKE, IS NULL, IS NOT NULL, CRO
     + = - the value can be an array, e.g. `['id = ?' => [1, 3, 7]]` (`id IN (1, 3, 7)`)
     + IS NULL, IS NOT NULL - Elasticsearch only
     + CROSS FIELDS - searching string in multiple fields, e.g. name `John Smith` in fields `firstname` and `surname`. Syntax is `"firstname,surname CROSS FIELDS ?" => "John Smith"`
+
+Logging
+-------
+
+Errors the library detects internally (malformed `where` conditions, unexpected
+Elasticsearch responses) are reported through a [PSR-3](https://www.php-fig.org/psr/psr-3/)
+logger. Pass your own via `setLogger()`:
+
+```php
+$client = new ElasticsearchClient(['host' => 'localhost']);
+$client->setLogger($myPsr3Logger);
+```
+
+If no logger is set, the library falls back to Tracy when `tracy/tracy` is installed
+(preserving the previous behaviour), and logs nothing otherwise. Tracy is a `suggest`
+dependency, no longer a required one - install it explicitly if you rely on that default.
+
+All exceptions thrown by the library implement `Hovjacky\NoSQL\NoSQLException`, so
+`catch (NoSQLException $e)` covers both `DBException` and `NotImplementedException`.

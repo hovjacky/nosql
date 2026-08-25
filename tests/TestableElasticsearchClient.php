@@ -3,6 +3,7 @@
 namespace Hovjacky\NoSQL\Tests;
 
 use Hovjacky\NoSQL\ElasticsearchClient;
+use Psr\Log\LoggerInterface;
 
 /**
  * Testovací klient zpřístupňující sestavení Elasticsearch query z where podmínky
@@ -10,6 +11,7 @@ use Hovjacky\NoSQL\ElasticsearchClient;
  */
 final class TestableElasticsearchClient extends ElasticsearchClient
 {
+    /** @phpstan-ignore constructor.unusedParameter (signatura musí odpovídat předkovi) */
     public function __construct(array $params = [])
     {
         // Záměrně nevoláme parent konstruktor - testy nepotřebují připojení k Elasticsearch.
@@ -24,5 +26,14 @@ final class TestableElasticsearchClient extends ElasticsearchClient
     public function buildQuery(string $condition, ?array $values = null): array
     {
         return $this->parseWhereCondition($condition, $values);
+    }
+
+
+    /**
+     * Zpřístupní logger, který klient reálně používá (výchozí nebo nastavený přes setLogger()).
+     */
+    public function exposeLogger(): LoggerInterface
+    {
+        return $this->getLogger();
     }
 }

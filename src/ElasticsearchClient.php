@@ -9,16 +9,10 @@ use Elastic\Elasticsearch\Exception\ClientResponseException;
 use Elastic\Elasticsearch\Response\Elasticsearch;
 use Http\Promise\Promise;
 use Throwable;
-use Tracy\Debugger;
 use stdClass;
 
-/**
- * Class ElasticsearchClient
- * @package Hovjacky\NoSQL
- */
 class ElasticsearchClient extends DBWithBooleanParsing
 {
-    /** @var Client */
     private Client $client;
 
     /** @var callable(string $value): string|null */
@@ -28,13 +22,13 @@ class ElasticsearchClient extends DBWithBooleanParsing
     private array $listPlaceholders = [];
 
 
-    /** @var int výchozí limit vrácených položek z elasticu */
+    /** Výchozí limit vrácených položek z elasticu. */
     public const DEFAULT_LIMIT = 100;
 
-    /** @var int Tímto se to bude chovat jako SQL, vrátí jeden záznam pro jednu GROUP BY hodnotu, ale dalo by se nastavit i jinak. */
+    /** Tímto se to bude chovat jako SQL, vrátí jeden záznam pro jednu GROUP BY hodnotu, ale dalo by se nastavit i jinak. */
     public const DEFAULT_GROUP_LIMIT = 1;
 
-    /** @var string visruální parametr s daty bucketu z odpovědi z Elasticsearch */
+    /** Virtuální parametr s daty bucketu z odpovědi z Elasticsearch. */
     public const PARAM_BUCKET = '__bucket';
 
 
@@ -89,7 +83,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Vrací klient připojení do elasticsearch.
-     * @return Client
      */
     public function getClient(): Client
     {
@@ -99,7 +92,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Vložení nových informací do elasticsearch.
-     * @return bool
      */
     public function insertOrUpdate(string $tableName, array $data): bool
     {
@@ -117,7 +109,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
         if ($response['result'] !== 'created' && $response['result'] !== 'updated')
         {
-            Debugger::log($response, Debugger::ERROR);
+            $this->getLogger()->error('Elasticsearch nevrátil po zápisu záznamu očekávaný výsledek.', ['response' => $response]);
 
             return false;
         }
@@ -128,7 +120,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Hromadné vložení informací do elasticsearch.
-     * @return bool
      * @throws DBException
      */
     public function bulkInsertOrUpdate(string $tableName, array $data, bool $waitForDataRefresh = false): bool
@@ -170,7 +161,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
         {
             if (!empty($responses['items']))
             {
-                Debugger::log($responses['items'], Debugger::ERROR);
+                $this->getLogger()->error('Chyby při hromadném zápisu do Elasticsearch.', ['items' => $responses['items']]);
             }
 
             throw new DBException(self::ERROR_BULK_INSERT_ERROR);
@@ -248,7 +239,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
         {
             if ($this->getElasticErrorType($e) === 'document_missing_exception')
             {
-                throw new DBException(str_replace('{$id}', (string) $id, self::ERROR_UPDATE));
+                throw DBException::recordNotUpdated($id);
             }
 
             $this->handleException($e);
@@ -289,7 +280,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
             // (neexistující index má naopak error type index_not_found_exception).
             if ($e->getCode() === 404 && $this->getElasticErrorType($e) !== 'index_not_found_exception')
             {
-                throw new DBException(str_replace('{$id}', (string) $id, self::ERROR_DELETE));
+                throw DBException::recordNotDeleted($id);
             }
 
             $this->handleException($e);
@@ -1130,7 +1121,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Odchycení společných výjimek.
-     * @param Throwable $e
      * @throws DBException
      * @throws Throwable
      */

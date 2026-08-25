@@ -4,10 +4,6 @@ namespace Hovjacky\NoSQL;
 
 use Throwable;
 
-/**
- * Class DBInterface
- * @package Hovjacky\NoSQL
- */
 interface DBInterface
 {
     /**

@@ -3,12 +3,7 @@
 namespace Hovjacky\NoSQL;
 
 use DateTimeInterface;
-use Tracy\Debugger;
 
-/**
- * Class DBWithBooleanParsing
- * @package Hovjacky\NoSQL
- */
 abstract class DBWithBooleanParsing extends DB
 {
     /**
@@ -37,9 +32,10 @@ abstract class DBWithBooleanParsing extends DB
             {
                 if (!str_contains($condition, '?'))
                 {
-                    Debugger::log('Too few questionmarks. Condition and values: ', Debugger::ERROR);
-                    Debugger::log($condition, Debugger::ERROR);
-                    Debugger::log($values, Debugger::ERROR);
+                    $this->getLogger()->error('Too few questionmarks in condition.', [
+                        'condition' => $condition,
+                        'values' => $values,
+                    ]);
 
                     throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
                 }
@@ -75,9 +71,10 @@ abstract class DBWithBooleanParsing extends DB
 
         if (str_contains($condition, '?'))
         {
-            Debugger::log('Too many questionmarks. Condition and values:', Debugger::ERROR);
-            Debugger::log($condition, Debugger::ERROR);
-            Debugger::log($values, Debugger::ERROR);
+            $this->getLogger()->error('Too many questionmarks in condition.', [
+                'condition' => $condition,
+                'values' => $values,
+            ]);
 
             throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
         }
@@ -117,8 +114,7 @@ abstract class DBWithBooleanParsing extends DB
             {
                 $temp = $this->trimAndOr(trim(substr($query, 0, $pos)));
 
-                /** @noinspection SlowArrayOperationsInLoopInspection */
-                $elements = array_merge($elements, $temp);
+                array_push($elements, ...$temp);
             }
 
             $query = trim(substr($query, $pos + 1));
@@ -164,8 +160,7 @@ abstract class DBWithBooleanParsing extends DB
 
             $temp = $this->trimAndOr(trim(substr($query, 0, (int) $queryPosClose)));
 
-            /** @noinspection SlowArrayOperationsInLoopInspection */
-            $elements = array_merge($elements, $temp);
+            array_push($elements, ...$temp);
 
             // Pokud je to vše skončíme
             if ($posClose + 1 >= mb_strlen($query))
@@ -181,8 +176,7 @@ abstract class DBWithBooleanParsing extends DB
             {
                 $temp = $this->trimAndOr(trim($query));
 
-                /** @noinspection SlowArrayOperationsInLoopInspection */
-                $elements = array_merge($elements, $temp);
+                array_push($elements, ...$temp);
             }
         }
 

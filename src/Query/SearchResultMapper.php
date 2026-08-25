@@ -3,7 +3,6 @@
 namespace Hovjacky\NoSQL\Query;
 
 use Closure;
-use Hovjacky\NoSQL\DB;
 use Hovjacky\NoSQL\NotImplementedException;
 use Throwable;
 
@@ -28,20 +27,19 @@ final class SearchResultMapper
 
 
     /**
-     * @param array<string, mixed> $params parametry findBy()
      * @param Closure(mixed[]): mixed[] $rowConverter převod hodnot z databázových typů na PHP
      * @return array<int, array<string, mixed>>|int
      * @throws Throwable
      * @phpstan-ignore missingType.iterableValue
      */
-    public function map(array $response, array $params, Closure $rowConverter): array|int
+    public function map(array $response, FindByParams $params, Closure $rowConverter): array|int
     {
-        if (!empty($params[DB::PARAM_GROUP_BY]))
+        if ($params->groupBy !== null)
         {
             return $this->mapBuckets($response, $params, $rowConverter);
         }
 
-        if (is_array($params[DB::PARAM_AGGREGATION] ?? null) && !empty($params[DB::PARAM_AGGREGATION]))
+        if ($params->aggregation !== [])
         {
             return $this->mapAggregations($response, $params, $rowConverter);
         }
@@ -52,18 +50,17 @@ final class SearchResultMapper
 
     /**
      * Výsledky seskupené přes GROUP BY, tj. buckets agregace `group_by`.
-     * @param array<string, mixed> $params
      * @param Closure(mixed[]): mixed[] $rowConverter
      * @return array<int, array<string, mixed>>|int
      * @throws Throwable
      * @phpstan-ignore missingType.iterableValue
      */
-    private function mapBuckets(array $response, array $params, Closure $rowConverter): array|int
+    private function mapBuckets(array $response, FindByParams $params, Closure $rowConverter): array|int
     {
         $buckets = $response['aggregations']['group_by']['buckets'];
 
         // Pokud zjišťujeme pouze počet záznamů, zajímá nás počet buckets
-        if (!empty($params[DB::PARAM_COUNT]))
+        if ($params->count)
         {
             return count($buckets);
         }
@@ -79,21 +76,15 @@ final class SearchResultMapper
             $results[] = $rowConverter($row);
         }
 
-        if (!empty($params[DB::PARAM_OFFSET]) && is_numeric($params[DB::PARAM_OFFSET]))
-        {
-            $results = array_slice($results, (int) $params[DB::PARAM_OFFSET]);
-        }
-
-        return $results;
+        return $params->offset !== null ? array_slice($results, $params->offset) : $results;
     }
 
 
     /**
-     * @param array<string, mixed> $params
      * @return array<string, mixed>
      * @phpstan-ignore missingType.iterableValue
      */
-    private function bucketToRow(array $bucket, array $params): array
+    private function bucketToRow(array $bucket, FindByParams $params): array
     {
         if (!empty($bucket['results']))
         {
@@ -109,10 +100,10 @@ final class SearchResultMapper
         }
         else
         {
-            $row = [$params[DB::PARAM_GROUP_BY] => $bucket['key'], 'count' => $bucket['doc_count']];
+            $row = [$params->groupBy => $bucket['key'], 'count' => $bucket['doc_count']];
         }
 
-        foreach (self::aggregationColumns($params) as $resultKey => $column)
+        foreach (self::aggregationResultKeys($params) as $resultKey)
         {
             $row[$resultKey] = $bucket[$resultKey]['value'];
         }
@@ -123,17 +114,16 @@ final class SearchResultMapper
 
     /**
      * Agregace bez GROUP BY - výsledkem je jediný řádek s hodnotami agregací.
-     * @param array<string, mixed> $params
      * @param Closure(mixed[]): mixed[] $rowConverter
      * @return array<int, array<string, mixed>>
      * @throws Throwable
      * @phpstan-ignore missingType.iterableValue
      */
-    private function mapAggregations(array $response, array $params, Closure $rowConverter): array
+    private function mapAggregations(array $response, FindByParams $params, Closure $rowConverter): array
     {
         $row = [];
 
-        foreach (self::aggregationColumns($params) as $resultKey => $column)
+        foreach (self::aggregationResultKeys($params) as $resultKey)
         {
             $row[$resultKey] = $response['aggregations'][$resultKey]['value'];
         }
@@ -144,18 +134,15 @@ final class SearchResultMapper
 
     /**
      * Běžné výsledky vyhledávání.
-     * @param array<string, mixed> $params
      * @param Closure(mixed[]): mixed[] $rowConverter
      * @return array<int, array<string, mixed>>
      * @throws Throwable
      * @phpstan-ignore missingType.iterableValue
      */
-    private function mapHits(array $response, array $params, Closure $rowConverter): array
+    private function mapHits(array $response, FindByParams $params, Closure $rowConverter): array
     {
         // `id` není součástí `_source`, musí se doplnit z `_id`.
-        $addId = is_array($params[DB::PARAM_FIELDS] ?? null)
-            && !empty($params[DB::PARAM_FIELDS])
-            && in_array('id', $params[DB::PARAM_FIELDS]);
+        $addId = $params->fields !== null && in_array('id', $params->fields);
 
         $results = [];
 
@@ -176,32 +163,21 @@ final class SearchResultMapper
 
 
     /**
-     * Názvy sloupců s hodnotami agregací ve výsledku (`min_age`) -> název sloupce (`age`).
-     * @param array<string, mixed> $params
-     * @return array<string, string>
+     * Názvy klíčů, pod kterými přijdou ve výsledku hodnoty agregací, např. `min_age`.
+     * @return list<string>
      */
-    private static function aggregationColumns(array $params): array
+    private static function aggregationResultKeys(FindByParams $params): array
     {
-        if (!is_array($params[DB::PARAM_AGGREGATION] ?? null) || empty($params[DB::PARAM_AGGREGATION]))
+        $keys = [];
+
+        foreach ($params->aggregation as $agg => $columns)
         {
-            return [];
-        }
-
-        $columns = [];
-
-        foreach ($params[DB::PARAM_AGGREGATION] as $agg => $aggColumns)
-        {
-            if (!is_array($aggColumns))
+            foreach ($columns as $column)
             {
-                $aggColumns = [$aggColumns];
-            }
-
-            foreach ($aggColumns as $column)
-            {
-                $columns["{$agg}_{$column}"] = $column;
+                $keys[] = "{$agg}_{$column}";
             }
         }
 
-        return $columns;
+        return $keys;
     }
 }

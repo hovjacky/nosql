@@ -7,6 +7,7 @@ use Elastic\Elasticsearch\Client;
 use Elastic\Elasticsearch\ClientBuilder;
 use Elastic\Elasticsearch\Exception\ClientResponseException;
 use Elastic\Elasticsearch\Response\Elasticsearch;
+use Hovjacky\NoSQL\Query\FindByParams;
 use Hovjacky\NoSQL\Query\SearchRequestBuilder;
 use Hovjacky\NoSQL\Query\SearchResultMapper;
 use Hovjacky\NoSQL\Type\DataTypeConverter;
@@ -400,13 +401,13 @@ class ElasticsearchClient extends DBWithBooleanParsing
         ?array &$resultData = null
     ): array|int
     {
-        $params = $this->checkAndRepairParams($params);
+        $findByParams = FindByParams::fromArray($this->checkAndRepairParams($params));
         $whereCompiler = $this->createWhereCompiler();
 
         // Počet záznamů bez GROUP BY umí Elasticsearch vrátit rovnou přes `_count`.
-        if (!empty($params[self::PARAM_COUNT]) && empty($params[self::PARAM_GROUP_BY]))
+        if ($findByParams->count && $findByParams->groupBy === null)
         {
-            $request = $this->getRequestBuilder()->buildCountRequest($tableName, $params, $whereCompiler);
+            $request = $this->getRequestBuilder()->buildCountRequest($tableName, $findByParams, $whereCompiler);
 
             try
             {
@@ -422,7 +423,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
             }
         }
 
-        $request = $this->getRequestBuilder()->build($tableName, $params, $whereCompiler);
+        $request = $this->getRequestBuilder()->build($tableName, $findByParams, $whereCompiler);
 
         try
         {
@@ -430,7 +431,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
                 $this->client->search($this->modifyRequest($request, $modifyParamsCallback)),
             );
 
-            return $this->getResultMapper()->map($response, $params, $this->convertFromDBDataTypes(...));
+            return $this->getResultMapper()->map($response, $findByParams, $this->convertFromDBDataTypes(...));
         }
         catch(Throwable $e)
         {

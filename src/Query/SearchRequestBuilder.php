@@ -7,8 +7,6 @@ use Hovjacky\NoSQL\DB;
 
 /**
  * Sestaví tělo Elasticsearch dotazu z parametrů metody findBy().
- *
- * Parametry se očekávají už zkontrolované a znormalizované metodou DB::checkAndRepairParams().
  */
 final class SearchRequestBuilder
 {
@@ -21,11 +19,10 @@ final class SearchRequestBuilder
 
 
     /**
-     * @param array<string, mixed> $params parametry findBy()
      * @param Closure(string, mixed[]|null): array<string, mixed> $whereCompiler přeloží jednu where podmínku na Elasticsearch query
      * @return array<string, mixed>
      */
-    public function build(string $tableName, array $params, Closure $whereCompiler): array
+    public function build(string $tableName, FindByParams $params, Closure $whereCompiler): array
     {
         $request = [
             'index' => $tableName,
@@ -45,11 +42,10 @@ final class SearchRequestBuilder
 
     /**
      * Dotaz na počet záznamů. Endpoint `_count` parametr `size` nepodporuje.
-     * @param array<string, mixed> $params
      * @param Closure(string, mixed[]|null): array<string, mixed> $whereCompiler
      * @return array<string, mixed>
      */
-    public function buildCountRequest(string $tableName, array $params, Closure $whereCompiler): array
+    public function buildCountRequest(string $tableName, FindByParams $params, Closure $whereCompiler): array
     {
         $request = $this->build($tableName, $params, $whereCompiler);
 
@@ -61,43 +57,35 @@ final class SearchRequestBuilder
 
     /**
      * @param array<string, mixed> $request
-     * @param array<string, mixed> $params
      */
-    private function applyFields(array &$request, array $params): void
+    private function applyFields(array &$request, FindByParams $params): void
     {
-        if (is_array($params[DB::PARAM_FIELDS] ?? null) && !empty($params[DB::PARAM_FIELDS]))
+        if ($params->fields !== null)
         {
-            $request['_source_includes'] = implode(',', $params[DB::PARAM_FIELDS]);
+            $request['_source_includes'] = implode(',', $params->fields);
         }
     }
 
 
     /**
      * @param array<string, mixed> $request
-     * @param array<string, mixed> $params
      * @param Closure(string, mixed[]|null): array<string, mixed> $whereCompiler
      */
-    private function applyWhere(array &$request, array $params, Closure $whereCompiler): void
+    private function applyWhere(array &$request, FindByParams $params, Closure $whereCompiler): void
     {
-        if (!is_array($params[DB::PARAM_WHERE] ?? null) || empty($params[DB::PARAM_WHERE]))
+        if ($params->where === [])
         {
             return;
         }
 
         $conditions = [];
 
-        foreach ($params[DB::PARAM_WHERE] as $condition => $values)
+        foreach ($params->where as $condition => $values)
         {
-            // checkAndRepairParams() sem pouští jen pole nebo null, ostatní obalíme stejně jako ono.
-            if ($values !== null && !is_array($values))
-            {
-                $values = [$values];
-            }
-
-            $parsedBooleanQuery = $whereCompiler((string) $condition, $values);
+            $parsedBooleanQuery = $whereCompiler($condition, $values);
 
             // Jediná podmínka se do query dá rovnou, není důvod ji balit do `bool.filter`.
-            if (count($params[DB::PARAM_WHERE]) === 1)
+            if (count($params->where) === 1)
             {
                 $conditions = $parsedBooleanQuery;
 
@@ -113,41 +101,33 @@ final class SearchRequestBuilder
 
     /**
      * @param array<string, mixed> $request
-     * @param array<string, mixed> $params
      */
-    private function applyLimit(array &$request, array $params): void
+    private function applyLimit(array &$request, FindByParams $params): void
     {
-        if (!empty($params[DB::PARAM_LIMIT]))
+        if ($params->limit !== null)
         {
-            if (empty($params[DB::PARAM_GROUP_BY]))
+            if ($params->groupBy === null)
             {
-                $request['body']['size'] = $params[DB::PARAM_LIMIT];
+                $request['body']['size'] = $params->limit;
 
-                if (!empty($params[DB::PARAM_OFFSET]))
+                if ($params->offset !== null)
                 {
-                    $request['body']['from'] = $params[DB::PARAM_OFFSET];
+                    $request['body']['from'] = $params->offset;
                 }
             }
             else
             {
                 // U GROUP BY se offset ořezává až nad výsledky, proto musí bucketů přijít i na offset.
-                $limit = $params[DB::PARAM_LIMIT];
-
-                if (!empty($params[DB::PARAM_OFFSET]))
-                {
-                    $limit += $params[DB::PARAM_OFFSET];
-                }
-
-                $request['body']['aggs']['group_by']['terms']['size'] = $limit;
+                $request['body']['aggs']['group_by']['terms']['size'] = $params->limit + ($params->offset ?? 0);
             }
         }
-        elseif (!empty($params[DB::PARAM_GROUP_BY]))
+        elseif ($params->groupBy !== null)
         {
             // Aggregation - nechceme normální výsledky
             $request['body']['size'] = 0;
             $request['body']['aggs']['group_by']['terms']['size'] = $this->defaultLimit;
         }
-        elseif (empty($params[DB::PARAM_COUNT]))
+        elseif (!$params->count)
         {
             $request['body']['size'] = $this->defaultLimit;
         }
@@ -156,25 +136,17 @@ final class SearchRequestBuilder
 
     /**
      * @param array<string, mixed> $request
-     * @param array<string, mixed> $params
      */
-    private function applySort(array &$request, array $params): void
+    private function applySort(array &$request, FindByParams $params): void
     {
-        if (
-            empty($params[DB::PARAM_ORDER_BY])
-            || !is_array($params[DB::PARAM_ORDER_BY])
-            || !empty($params[DB::PARAM_GROUP_BY])
-            || !empty($params[DB::PARAM_AGGREGATION])
-        )
+        if ($params->orderBy === [] || $params->groupBy !== null || $params->aggregation !== [])
         {
             return;
         }
 
-        foreach ($params[DB::PARAM_ORDER_BY] as $column)
+        foreach ($params->orderBy as $field)
         {
-            [$column, $desc] = self::splitDescSuffix($column);
-
-            $request['body']['sort'][] = [$column => ($desc ? 'desc' : 'asc')];
+            $request['body']['sort'][] = [$field->column => $field->direction()];
         }
 
         $request['body']['sort'][] = '_score';
@@ -183,50 +155,47 @@ final class SearchRequestBuilder
 
     /**
      * @param array<string, mixed> $request
-     * @param array<string, mixed> $params
      */
-    private function applyGroupBy(array &$request, array $params): void
+    private function applyGroupBy(array &$request, FindByParams $params): void
     {
-        if (empty($params[DB::PARAM_GROUP_BY]))
+        if ($params->groupBy === null)
         {
             return;
         }
 
         // Je možné v groupBy uvést "script" a definovat skript v groupByScript
-        if ($params[DB::PARAM_GROUP_BY] !== 'script' || empty($params[DB::PARAM_GROUP_BY_SCRIPT]))
+        if ($params->groupBy !== 'script' || $params->groupByScript === null)
         {
-            $request['body']['aggs']['group_by']['terms']['field'] = $params[DB::PARAM_GROUP_BY];
+            $request['body']['aggs']['group_by']['terms']['field'] = $params->groupBy;
         }
         else
         {
-            $request['body']['aggs']['group_by']['terms']['script'] = $params[DB::PARAM_GROUP_BY_SCRIPT];
+            $request['body']['aggs']['group_by']['terms']['script'] = $params->groupByScript;
         }
 
-        if (!is_array($params[DB::PARAM_ORDER_BY] ?? null) || empty($params[DB::PARAM_ORDER_BY]))
+        if ($params->orderBy === [])
         {
             return;
         }
 
         $request['body']['aggs']['group_by']['aggs']['results']['top_hits']['size'] = 1;
 
-        if (!empty($params[DB::PARAM_FIELDS]))
+        if ($params->fields !== null)
         {
             // Chceme vrátit jen požadovaná pole
-            $request['body']['aggs']['group_by']['aggs']['results']['top_hits']['_source']['includes'] = $params[DB::PARAM_FIELDS];
+            $request['body']['aggs']['group_by']['aggs']['results']['top_hits']['_source']['includes'] = $params->fields;
         }
 
-        foreach ($params[DB::PARAM_ORDER_BY] as $column)
+        foreach ($params->orderBy as $field)
         {
-            [$column, $desc] = self::splitDescSuffix($column);
-
             $request['body']['aggs']['group_by']['terms']['order'][] = [
-                self::bucketOrderKey($column, $params[DB::PARAM_GROUP_BY]) => ($desc ? 'desc' : 'asc'),
+                self::bucketOrderKey($field->column, $params->groupBy) => $field->direction(),
             ];
 
             // Musí se přidat agregace podle sloupce, podle kterého chceme řadit
-            if ($column !== $params[DB::PARAM_GROUP_BY] && $column !== DB::PARAM_COUNT)
+            if ($field->column !== $params->groupBy && $field->column !== DB::PARAM_COUNT)
             {
-                $request['body']['aggs']['group_by']['aggs'][$column][$desc ? 'max' : 'min']['field'] = $column;
+                $request['body']['aggs']['group_by']['aggs'][$field->column][$field->descending ? 'max' : 'min']['field'] = $field->column;
             }
         }
 
@@ -237,24 +206,13 @@ final class SearchRequestBuilder
     /**
      * Vnitřní řazení v GROUP BY buckets (jaký záznam ze skupiny chceme).
      * @param array<string, mixed> $request
-     * @param array<string, mixed> $params
      */
-    private function applyGroupInternalOrderBy(array &$request, array $params): void
+    private function applyGroupInternalOrderBy(array &$request, FindByParams $params): void
     {
-        if (
-            !is_array($params[DB::PARAM_GROUP_INTERNAL_ORDER_BY] ?? null)
-            || empty($params[DB::PARAM_GROUP_INTERNAL_ORDER_BY])
-        )
+        foreach ($params->groupInternalOrderBy as $field)
         {
-            return;
-        }
-
-        foreach ($params[DB::PARAM_GROUP_INTERNAL_ORDER_BY] as $column)
-        {
-            [$column, $desc] = self::splitDescSuffix($column);
-
             $request['body']['aggs']['group_by']['aggs']['results']['top_hits']['sort'][] = [
-                $column => ['order' => $desc ? 'desc' : 'asc'],
+                $field->column => ['order' => $field->direction()],
             ];
         }
     }
@@ -262,26 +220,15 @@ final class SearchRequestBuilder
 
     /**
      * @param array<string, mixed> $request
-     * @param array<string, mixed> $params
      */
-    private function applyAggregation(array &$request, array $params): void
+    private function applyAggregation(array &$request, FindByParams $params): void
     {
-        if (!is_array($params[DB::PARAM_AGGREGATION] ?? null) || empty($params[DB::PARAM_AGGREGATION]))
+        foreach ($params->aggregation as $agg => $columns)
         {
-            return;
-        }
-
-        foreach ($params[DB::PARAM_AGGREGATION] as $agg => $columns)
-        {
-            if (!is_array($columns))
-            {
-                $columns = [$columns];
-            }
-
             foreach ($columns as $column)
             {
                 // Bez GROUP BY jde agregace do kořene, s GROUP BY dovnitř bucketu.
-                if (empty($params[DB::PARAM_GROUP_BY]))
+                if ($params->groupBy === null)
                 {
                     $request['body']['aggs']["{$agg}_{$column}"][$agg] = ['field' => $column];
                 }
@@ -305,17 +252,5 @@ final class SearchRequestBuilder
         }
 
         return $column === DB::PARAM_COUNT ? '_count' : $column;
-    }
-
-
-    /**
-     * Oddělí od názvu sloupce příponu značící sestupné řazení.
-     * @return array{string, bool}
-     */
-    private static function splitDescSuffix(string $column): array
-    {
-        $desc = strpos($column, DB::ORDER_BY_DESC_POSTFIX);
-
-        return $desc !== false ? [substr($column, 0, $desc), true] : [$column, false];
     }
 }

@@ -4,6 +4,7 @@ namespace Hovjacky\NoSQL\Tests\Query;
 
 use DateTime;
 use Hovjacky\NoSQL\ElasticsearchClient;
+use Hovjacky\NoSQL\Query\FindByParams;
 use Hovjacky\NoSQL\Query\SearchResultMapper;
 use Hovjacky\NoSQL\Tests\TestableElasticsearchClient;
 use PHPUnit\Framework\TestCase;
@@ -36,7 +37,7 @@ final class SearchResultMapperTest extends TestCase
      */
     private function map(array $response, array $params): array|int
     {
-        return $this->mapper->map($response, $this->client->repairParams($params), $this->client->convertFromDBDataTypes(...));
+        return $this->mapper->map($response, FindByParams::fromArray($params), $this->client->convertFromDBDataTypes(...));
     }
 
 

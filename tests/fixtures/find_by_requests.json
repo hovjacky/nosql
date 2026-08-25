@@ -612,5 +612,189 @@
                 }
             }
         }
+    },
+    "limit_zero": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "limit_string": {
+        "index": "mytable",
+        "body": {
+            "size": 10
+        }
+    },
+    "limit_string_offset": {
+        "index": "mytable",
+        "body": {
+            "size": 10,
+            "from": 5
+        }
+    },
+    "offset_zero": {
+        "index": "mytable",
+        "body": {
+            "size": 10
+        }
+    },
+    "offset_nonnumeric": {
+        "index": "mytable",
+        "body": {
+            "size": 10
+        }
+    },
+    "count_false": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "count_zero": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "count_string": {
+        "index": "mytable",
+        "body": []
+    },
+    "fields_empty": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "fields_zero": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "where_empty": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "orderby_empty": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "orderby_empty_string": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "group_empty_string": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "group_zero": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "agg_empty": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "agg_zero": {
+        "index": "mytable",
+        "body": {
+            "size": 100
+        }
+    },
+    "group_script_empty": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "script"
+                    }
+                }
+            }
+        }
+    },
+    "extra_unknown_key": {
+        "index": "mytable",
+        "body": {
+            "size": 3
+        }
+    },
+    "group_limit_str_off": {
+        "index": "mytable",
+        "body": {
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 9,
+                        "field": "n"
+                    }
+                }
+            }
+        }
+    },
+    "group_internal_nocnt": {
+        "index": "mytable",
+        "body": {
+            "size": 0,
+            "aggs": {
+                "group_by": {
+                    "terms": {
+                        "size": 100,
+                        "field": "n"
+                    }
+                }
+            }
+        }
+    },
+    "order_desc_midword": {
+        "index": "mytable",
+        "body": {
+            "size": 100,
+            "sort": [
+                {
+                    "my": "desc"
+                },
+                "_score"
+            ]
+        }
+    },
+    "agg_int_column": {
+        "index": "mytable",
+        "body": {
+            "size": 100,
+            "aggs": {
+                "min_5": {
+                    "min": {
+                        "field": "5"
+                    }
+                }
+            }
+        }
+    },
+    "where_scalar_wrapped": {
+        "index": "mytable",
+        "body": {
+            "query": {
+                "match": {
+                    "id": 5
+                }
+            },
+            "size": 100
+        }
     }
 }

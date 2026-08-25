@@ -4,6 +4,8 @@ namespace Hovjacky\NoSQL\Tests\Query;
 
 use DateTime;
 use DateTimeZone;
+use Hovjacky\NoSQL\DB;
+use Hovjacky\NoSQL\DBException;
 use Hovjacky\NoSQL\ElasticsearchClient;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -77,7 +79,58 @@ final class SearchRequestBuilderTest extends TestCase
                 'limit' => 7,
                 'offset' => 2,
             ],
+
+            // Hraniční hodnoty - hlídají sémantiku empty(), na které stojí volitelnost parametrů.
+            'limit_zero' => ['limit' => 0],
+            'limit_string' => ['limit' => '10'],
+            'limit_string_offset' => ['limit' => '10', 'offset' => '5'],
+            'offset_zero' => ['limit' => 10, 'offset' => 0],
+            'offset_nonnumeric' => ['limit' => 10, 'offset' => 'abc'],
+            'count_false' => ['count' => false],
+            'count_zero' => ['count' => 0],
+            'count_string' => ['count' => '1'],
+            'fields_empty' => ['fields' => []],
+            'fields_zero' => ['fields' => 0],
+            'where_empty' => ['where' => []],
+            'orderby_empty' => ['orderBy' => []],
+            'orderby_empty_string' => ['orderBy' => ''],
+            'group_empty_string' => ['groupBy' => ''],
+            'group_zero' => ['groupBy' => 0],
+            'agg_empty' => ['aggregation' => []],
+            'agg_zero' => ['aggregation' => 0],
+            'group_script_empty' => ['groupBy' => 'script', 'groupByScript' => ''],
+            'extra_unknown_key' => ['limit' => 3, 'somethingCustom' => 'x'],
+            'group_limit_str_off' => ['groupBy' => 'n', 'limit' => '7', 'offset' => '2'],
+            'group_internal_nocnt' => ['groupBy' => 'n', 'orderBy' => ['a'], 'groupInternalOrderBy' => ['b desc'], 'count' => true],
+            'order_desc_midword' => ['orderBy' => ['my desc column']],
+            'agg_int_column' => ['aggregation' => ['min' => [5]]],
+            'where_scalar_wrapped' => ['where' => ['id = ?' => 5]],
         ];
+    }
+
+
+    /**
+     * @return iterable<string, array{array<string, mixed>, string}>
+     */
+    public static function invalidParamsProvider(): iterable
+    {
+        yield 'fields nejsou pole' => [['fields' => 'id'], DB::ERROR_FIELDS];
+        yield 'where není pole' => [['where' => 'x'], DB::ERROR_WHERE];
+        yield 'where má číselný klíč' => [['where' => [0 => 'x']], DB::ERROR_WHERE];
+        yield 'aggregation není pole' => [['aggregation' => 'x'], DB::ERROR_AGGREGATION];
+    }
+
+
+    /**
+     * @param array<string, mixed> $params
+     */
+    #[DataProvider('invalidParamsProvider')]
+    public function testInvalidParamsAreRejected(array $params, string $expectedMessage): void
+    {
+        $this->expectException(DBException::class);
+        $this->expectExceptionMessage($expectedMessage);
+
+        $this->client->findBy('mytable', $params, static fn (array $request): never => throw new CapturedRequest($request));
     }
 
 

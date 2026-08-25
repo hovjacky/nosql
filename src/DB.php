@@ -3,6 +3,7 @@
 namespace Hovjacky\NoSQL;
 
 use Hovjacky\NoSQL\Logging\TracyLogger;
+use Hovjacky\NoSQL\Query\FindByParams;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -70,78 +71,13 @@ abstract class DB implements DBInterface, LoggerAwareInterface
 
     /**
      * Zkontroluje parametry pro findBy, popř. vyhodí výjimku nebo je upraví.
+     * Přepsáním v potomkovi jde do kontroly zasáhnout, findBy() výsledek použije.
      * @param array<string, mixed> $params Sloupec -> hodnota
      * @return array<string, mixed> Sloupec -> upravená hodnota
      * @throws DBException
      */
     protected function checkAndRepairParams(array $params): array
     {
-        if (!empty($params[self::PARAM_FIELDS]) && !is_array($params[self::PARAM_FIELDS]))
-        {
-            throw new DBException(self::ERROR_FIELDS);
-        }
-
-        if (!empty($params[self::PARAM_WHERE]))
-        {
-            if (!is_array($params[self::PARAM_WHERE]))
-            {
-                throw new DBException(self::ERROR_WHERE);
-            }
-            foreach ($params[self::PARAM_WHERE] as $condition => $values)
-            {
-                if (is_numeric($condition))
-                {
-                    throw new DBException(self::ERROR_WHERE);
-                }
-                if (isset($values) && !is_array($values))
-                {
-                    $params[self::PARAM_WHERE][$condition] = [$values];
-                }
-            }
-        }
-
-        if (!empty($params[self::PARAM_ORDER_BY]))
-        {
-            if (!is_array($params[self::PARAM_ORDER_BY]))
-            {
-                $params[self::PARAM_ORDER_BY] = [$params[self::PARAM_ORDER_BY]];
-            }
-
-            // Při získávání počtu záznamů nefunguje orderBy (ani jej nepotřebujeme)
-            if (!empty($params[self::PARAM_COUNT]))
-            {
-                unset($params[self::PARAM_ORDER_BY]);
-            }
-        }
-
-        if (!empty($params[self::PARAM_GROUP_INTERNAL_ORDER_BY]))
-        {
-            if (!is_array($params[self::PARAM_GROUP_INTERNAL_ORDER_BY]))
-            {
-                $params[self::PARAM_GROUP_INTERNAL_ORDER_BY] = [$params[self::PARAM_GROUP_INTERNAL_ORDER_BY]];
-            }
-            // Při získávání počtu záznamů nepotřebujeme groupInternalOrderBy
-            if (!empty($params[self::PARAM_COUNT]))
-            {
-                unset($params[self::PARAM_GROUP_INTERNAL_ORDER_BY]);
-            }
-        }
-
-        if (!empty($params[self::PARAM_AGGREGATION]))
-        {
-            if (!is_array($params[self::PARAM_AGGREGATION]))
-            {
-                throw new DBException(self::ERROR_AGGREGATION);
-            }
-            foreach ($params[self::PARAM_AGGREGATION] as $agg => $columns)
-            {
-                if (!is_array($columns))
-                {
-                    $params[self::PARAM_AGGREGATION][$agg] = [$columns];
-                }
-            }
-        }
-
-        return $params;
+        return FindByParams::fromArray($params)->toArray();
     }
 }

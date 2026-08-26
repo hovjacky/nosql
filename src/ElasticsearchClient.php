@@ -188,10 +188,10 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
         if ($responses['errors'] !== false)
         {
-            if (!empty($responses['items']))
-            {
-                $this->logError('Chyby při hromadném zápisu do Elasticsearch.', ['items' => $responses['items']]);
-            }
+            $this->logError(
+                'Chyby při hromadném zápisu do Elasticsearch.',
+                ['errors' => $responses['errors'], 'items' => $responses['items'] ?? []],
+            );
 
             throw new DBException(self::ERROR_BULK_INSERT_ERROR);
         }

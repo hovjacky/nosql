@@ -3,6 +3,7 @@
 namespace Hovjacky\NoSQL;
 
 use Closure;
+use DateTimeInterface;
 use Elastic\Elasticsearch\Client;
 use Elastic\Elasticsearch\ClientBuilder;
 use Elastic\Elasticsearch\Exception\ClientResponseException;
@@ -13,6 +14,7 @@ use Hovjacky\NoSQL\Query\SearchResult;
 use Hovjacky\NoSQL\Query\SearchResultMapper;
 use Hovjacky\NoSQL\Type\DataTypeConverter;
 use Http\Promise\Promise;
+use Stringable;
 use Throwable;
 use stdClass;
 
@@ -103,6 +105,8 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Vložení nových informací do elasticsearch.
+     * @throws DBException
+     * @throws Throwable
      */
     public function insertOrUpdate(string $tableName, array $data): bool
     {
@@ -116,7 +120,14 @@ class ElasticsearchClient extends DBWithBooleanParsing
             $params['id'] = $data['id'];
         }
 
-        $response = $this->responseToArray($this->client->index($params));
+        try
+        {
+            $response = $this->responseToArray($this->client->index($params));
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
+        }
 
         if ($response['result'] !== 'created' && $response['result'] !== 'updated')
         {
@@ -166,7 +177,14 @@ class ElasticsearchClient extends DBWithBooleanParsing
             $params['refresh'] = 'wait_for';
         }
 
-        $responses = $this->responseToArray($this->client->bulk($params));
+        try
+        {
+            $responses = $this->responseToArray($this->client->bulk($params));
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
+        }
 
         if ($responses['errors'] !== false)
         {
@@ -308,6 +326,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
     /**
      * Smazání všech záznamů z elasticsearch.
      * @throws DBException
+     * @throws Throwable
      */
     public function deleteAll(string $tableName): void
     {
@@ -323,7 +342,14 @@ class ElasticsearchClient extends DBWithBooleanParsing
             ],
         ];
 
-        $this->client->deleteByQuery($params);
+        try
+        {
+            $this->client->deleteByQuery($params);
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
+        }
     }
 
 
@@ -348,7 +374,11 @@ class ElasticsearchClient extends DBWithBooleanParsing
                 return false;
             }
 
-            throw $e;
+            $this->handleException($e);
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
         }
     }
 
@@ -378,13 +408,22 @@ class ElasticsearchClient extends DBWithBooleanParsing
     /**
      * Vytvoří index podle zadané definice (settings + mappings).
      * @param array<string, mixed> $definition tělo požadavku pro vytvoření indexu
+     * @throws DBException
+     * @throws Throwable
      */
     public function createIndex(string $tableName, array $definition): void
     {
-        $this->client->indices()->create([
-            'index' => $tableName,
-            'body' => $definition,
-        ]);
+        try
+        {
+            $this->client->indices()->create([
+                'index' => $tableName,
+                'body' => $definition,
+            ]);
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
+        }
     }
 
 
@@ -392,7 +431,8 @@ class ElasticsearchClient extends DBWithBooleanParsing
      * Vrátí záznamy odpovídající daným kritériím, nebo jejich počet (s parametrem `count`).
      *
      * @param array<mixed>|null $resultData Surová odpověď z Elasticsearch (předává se referencí).
-     *      @deprecated Použijte search(), která vrací SearchResult i se surovou odpovědí.
+     *      Zastaralé, použijte search(), která vrací SearchResult i se surovou odpovědí.
+     *      (Značka `@deprecated` tu být nemůže, vztáhla by se na celou metodu.)
      * @throws DBException
      * @throws Throwable
      */
@@ -434,7 +474,12 @@ class ElasticsearchClient extends DBWithBooleanParsing
         $response = $this->executeSearch($tableName, $findByParams, $modifyParamsCallback);
         $rows = $this->getResultMapper()->map($response, $findByParams, $this->convertFromDBDataTypes(...));
 
-        return new SearchResult(is_array($rows) ? $rows : [], self::totalHits($response), $response);
+        return new SearchResult(
+            is_array($rows) ? $rows : [],
+            self::totalHits($response),
+            $response,
+            self::totalRelation($response),
+        );
     }
 
 
@@ -467,11 +512,24 @@ class ElasticsearchClient extends DBWithBooleanParsing
     {
         $request = $this->getRequestBuilder()->buildCountRequest($tableName, $params, $this->createWhereCompiler());
 
+        return $this->sendCount($this->modifyRequest($request, $modifyParamsCallback));
+    }
+
+
+    /**
+     * Odešle hotový dotaz na endpoint `_count`.
+     *
+     * Odesílání je oddělené od sestavení dotazu schválně: testy a dekorátory tak můžou
+     * podstrčit odpověď, aniž by přeskočily sestavení dotazu, které je potřeba otestovat.
+     * @param array<string, mixed> $request
+     * @throws DBException
+     * @throws Throwable
+     */
+    protected function sendCount(array $request): int
+    {
         try
         {
-            $response = $this->responseToArray(
-                $this->client->count($this->modifyRequest($request, $modifyParamsCallback)),
-            );
+            $response = $this->responseToArray($this->client->count($request));
 
             return (int) $response[self::PARAM_COUNT];
         }
@@ -496,11 +554,25 @@ class ElasticsearchClient extends DBWithBooleanParsing
     {
         $request = $this->getRequestBuilder()->build($tableName, $params, $this->createWhereCompiler());
 
+        return $this->sendSearch($this->modifyRequest($request, $modifyParamsCallback));
+    }
+
+
+    /**
+     * Odešle hotový dotaz do Elasticsearch a vrátí surovou odpověď.
+     *
+     * Odesílání je oddělené od sestavení dotazu schválně: testy a dekorátory tak můžou
+     * podstrčit odpověď, aniž by přeskočily sestavení dotazu, které je potřeba otestovat.
+     * @param array<string, mixed> $request
+     * @return mixed[]
+     * @throws DBException
+     * @throws Throwable
+     */
+    protected function sendSearch(array $request): array
+    {
         try
         {
-            return $this->responseToArray(
-                $this->client->search($this->modifyRequest($request, $modifyParamsCallback)),
-            );
+            return $this->responseToArray($this->client->search($request));
         }
         catch(Throwable $e)
         {
@@ -522,13 +594,39 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
 
     /**
-     * Přeloží jednu where podmínku na Elasticsearch query.
-     * Konverze hodnot jde přes convertToDBDataTypes(), aby ji šlo v potomcích přepsat.
+     * Je počet z odpovědi přesný (`eq`), nebo jen dolní mez (`gte`)?
+     *
+     * Elasticsearch ve výchozím nastavení počítá shody jen do 10 000 a dál hlásí `gte`.
+     * Přesný počet vrací count() přes endpoint `_count`.
+     * @phpstan-ignore missingType.iterableValue
+     */
+    private static function totalRelation(array $response): ?string
+    {
+        $relation = $response['hits']['total']['relation'] ?? null;
+
+        return is_string($relation) ? $relation : null;
+    }
+
+
+    /**
      * @return Closure(string, mixed[]|null): array<string, mixed>
      */
     private function createWhereCompiler(): Closure
     {
-        return fn (string $condition, ?array $values): array => $this->parseWhereCondition(
+        return fn (string $condition, ?array $values): array => $this->compileWhereCondition($condition, $values);
+    }
+
+
+    /**
+     * Přeloží jednu where podmínku na Elasticsearch query.
+     * Konverze hodnot jde přes convertToDBDataTypes(), aby ji šlo v potomcích přepsat.
+     * @param mixed[]|null $values
+     * @return array<string, mixed>
+     * @throws DBException
+     */
+    protected function compileWhereCondition(string $condition, ?array $values): array
+    {
+        return $this->parseWhereCondition(
             $condition,
             $values !== null ? $this->convertToDBDataTypes($values) : null,
         );
@@ -564,18 +662,38 @@ class ElasticsearchClient extends DBWithBooleanParsing
     }
 
 
+    /**
+     * Do vnořených polí se zanořuje přes `$this`, aby se přepsání metody v potomkovi
+     * uplatnilo na celý dokument, ne jen na jeho první úroveň.
+     */
     public function convertToDBDataTypes(array $data): array
     {
-        return $this->getDataTypeConverter()->toDatabase($data);
+        foreach ($data as $key => $value)
+        {
+            $data[$key] = is_array($value)
+                ? $this->convertToDBDataTypes($value)
+                : $this->getDataTypeConverter()->valueToDatabase($value);
+        }
+
+        return $data;
     }
 
 
     /**
+     * Do vnořených polí se zanořuje přes `$this`, aby se přepsání metody v potomkovi
+     * uplatnilo na celý dokument, ne jen na jeho první úroveň.
      * @throws Throwable
      */
     public function convertFromDBDataTypes(array $data): array
     {
-        return $this->getDataTypeConverter()->fromDatabase($data);
+        foreach ($data as $key => $value)
+        {
+            $data[$key] = is_array($value)
+                ? $this->convertFromDBDataTypes($value)
+                : $this->getDataTypeConverter()->valueFromDatabase($value);
+        }
+
+        return $data;
     }
 
 
@@ -686,7 +804,8 @@ class ElasticsearchClient extends DBWithBooleanParsing
         $field = self::fieldBefore($expr, $pos);
         $result = [];
 
-        // Je možné zde dát pole, zadané takto [self::PARAM_WHERE]['sloupec = ?'] = [1, 2, 3];
+        // Hodnotou může být i seznam - zapsaný jako [self::PARAM_WHERE]['sloupec = ?'] = [[1, 2, 3]].
+        // Vnější pole jsou hodnoty pro jednotlivé `?`, vnitřní je ten seznam.
         if (($listValue = $this->resolveListValue($value)) !== null)
         {
             $result['terms'][$field] = $listValue;
@@ -756,7 +875,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
     {
         return [
             'multi_match' => [
-                'query' => (string) $this->resolveValue(self::valueAfter($expr, $pos, $operator)),
+                'query' => $this->resolveText(self::valueAfter($expr, $pos, $operator)),
                 'type' => 'cross_fields',
                 'operator' => 'and',
                 'fields' => explode(',', self::fieldBefore($expr, $pos)),
@@ -831,10 +950,65 @@ class ElasticsearchClient extends DBWithBooleanParsing
      *
      * Značka `#n#` se nahradí předanou hodnotou včetně jejího typu. Text napsaný přímo
      * v podmínce (např. `age > 18`) žádný typ nemá, ten se odhaduje podle zápisu.
+     * @throws DBException
      */
     private function resolveValue(string $text): mixed
     {
-        return $this->isBoundValue($text) ? $this->boundValues[$text] : $this->normalizeValue($text);
+        // Samotná značka je celá hodnota, takže si může nechat svůj typ.
+        if ($this->isBoundValue($text))
+        {
+            return $this->boundValues[$text];
+        }
+
+        // Značka uprostřed textu (`name = ?%`) je jen jeho část, tam typ zachovat nejde.
+        return $this->normalizeValue($this->resolveText($text));
+    }
+
+
+    /**
+     * Textová podoba hodnoty, na kterou se text odkazuje.
+     * Značky se nahradí hodnotami, zbytek textu zůstane, jak ho napsal vývojář.
+     * @throws DBException
+     */
+    private function resolveText(string $text): string
+    {
+        if ($this->boundValues === [])
+        {
+            return $text;
+        }
+
+        return (string) preg_replace_callback(
+            '/#\d+#/',
+            fn (array $matches): string => array_key_exists($matches[0], $this->boundValues)
+                ? $this->boundValueToString($matches[0])
+                : $matches[0],
+            $text,
+        );
+    }
+
+
+    /**
+     * Hodnota jako text. Ne každou hodnotu jde na text převést - pole ani objekt
+     * by se převedl na `Array`, resp. by spadl na fatální chybě.
+     * @throws DBException
+     */
+    private function boundValueToString(string $token): string
+    {
+        $value = $this->boundValues[$token];
+
+        if ($value instanceof DateTimeInterface)
+        {
+            return $value->format('c');
+        }
+
+        if (!is_scalar($value) && !$value instanceof Stringable)
+        {
+            throw new DBException(
+                'Hodnotu filtru typu ' . get_debug_type($value) . ' nelze v této podmínce použít jako text.',
+            );
+        }
+
+        return (string) $value;
     }
 
 
@@ -851,7 +1025,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
             return is_array($value) ? array_values($value) : null;
         }
 
-        return self::parseInlineList($text);
+        return $this->parseInlineList($text);
     }
 
 
@@ -899,25 +1073,30 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
 
     /**
-     * Rozparsuje seznam zapsaný přímo v podmínce, tedy `[a,b,c]`.
+     * Rozparsuje seznam zapsaný přímo v podmínce, tedy `[a,b,c]` nebo `[?,?]`.
      * Vrací null, pokud text seznam není.
-     * @return list<int|string>|null
+     * @return list<mixed>|null
      */
-    private static function parseInlineList(string $text): ?array
+    private function parseInlineList(string $text): ?array
     {
         if (($start = strpos($text, '[')) === false || ($end = strpos($text, ']')) === false || $start >= $end)
         {
             return null;
         }
 
-        $items = explode(',', substr($text, $start + 1, $end - $start - 1));
+        $items = [];
 
-        foreach ($items as $key => $item)
+        foreach (explode(',', substr($text, $start + 1, $end - $start - 1)) as $item)
         {
-            if ((int) $item == $item)
+            // Položkou seznamu může být i `?`, pak si hodnota drží svůj typ.
+            if ($this->isBoundValue(trim($item)))
             {
-                $items[$key] = (int) $item;
+                $items[] = $this->boundValues[trim($item)];
+
+                continue;
             }
+
+            $items[] = (int) $item == $item ? (int) $item : $item;
         }
 
         return $items;
@@ -928,6 +1107,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
      * Rozparsuje LIKE výraz (včetně volitelné klauzule ESCAPE) na wildcard query.
      * Escape znak se načítá z klauzule `ESCAPE 'x'`, pokud je definována.
      * @return array<string, mixed>
+     * @throws DBException
      */
     private function parseLikeExpression(string $field, string $value, bool $negated = false): array
     {
@@ -940,15 +1120,14 @@ class ElasticsearchClient extends DBWithBooleanParsing
             $value = trim((string) preg_replace("/\s+ESCAPE\s+'.'$/u", '', $value));
         }
 
-        if ($this->isBoundValue($value))
-        {
-            $value = (string) $this->boundValues[$value];
-        }
         // Hodnota může být SQL literál v uvozovkách (např. `col LIKE ''` nebo `col LIKE '%abc%'`).
-        elseif (mb_strlen($value) >= 2 && str_starts_with($value, "'") && str_ends_with($value, "'"))
+        if (mb_strlen($value) >= 2 && str_starts_with($value, "'") && str_ends_with($value, "'"))
         {
             $value = mb_substr($value, 1, mb_strlen($value) - 2);
         }
+
+        // Značka může být i jen částí vzoru, třeba `name LIKE '%?%'`.
+        $value = $this->resolveText($value);
 
         if ($this->wildcardValueFilter !== null)
         {
@@ -972,18 +1151,14 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Převede SQL LIKE pattern na Elasticsearch wildcard pattern.
-     * S definovaným escape znakem se uplatňuje plná SQL LIKE sémantika:
-     * `%` -> `*`, `_` -> `?`, escapované znaky jsou literály a wildcard znaky
-     * Elasticsearch (`*`, `?`, `\`) se v literálech escapují.
-     * Bez escape znaku zůstává zachováno původní chování (pouze převod `%` na `*`).
+     *
+     * Zástupným znakem je `%` (a s definovaným escape znakem i `_`), tak to má SQL LIKE.
+     * Wildcard znaky Elasticsearch (`*`, `?`, `\`) zástupné nejsou, takže se escapují -
+     * jinak by `*` z hodnoty, kterou zadal uživatel, procházel celý index.
+     * S definovaným escape znakem navíc platí, že escapovaný znak je vždy literál.
      */
     private function translateLikeToWildcard(string $value, ?string $escapeChar): string
     {
-        if ($escapeChar === null)
-        {
-            return (string) mb_ereg_replace('%', '*', $value);
-        }
-
         $result = '';
         $chars = mb_str_split($value);
         $count = count($chars);
@@ -993,19 +1168,22 @@ class ElasticsearchClient extends DBWithBooleanParsing
             $char = $chars[$i];
 
             // Escapovaný znak je vždy literál.
-            if ($char === $escapeChar && $i + 1 < $count)
+            if ($escapeChar !== null && $char === $escapeChar && $i + 1 < $count)
             {
                 $result .= $this->escapeWildcardCharacter($chars[++$i]);
 
                 continue;
             }
 
-            $result .= match ($char)
+            // `_` je zástupný znak jen v plné SQL LIKE sémantice, tedy s klauzulí ESCAPE.
+            if ($char === '_' && $escapeChar !== null)
             {
-                '%' => '*',
-                '_' => '?',
-                default => $this->escapeWildcardCharacter($char),
-            };
+                $result .= '?';
+
+                continue;
+            }
+
+            $result .= $char === '%' ? '*' : $this->escapeWildcardCharacter($char);
         }
 
         return $result;

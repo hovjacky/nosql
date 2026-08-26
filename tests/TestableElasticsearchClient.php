@@ -3,7 +3,6 @@
 namespace Hovjacky\NoSQL\Tests;
 
 use Hovjacky\NoSQL\ElasticsearchClient;
-use Hovjacky\NoSQL\Query\FindByParams;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -21,12 +20,13 @@ final class TestableElasticsearchClient extends ElasticsearchClient
 
     /**
      * Sestaví Elasticsearch query pro zadanou where podmínku a její hodnoty.
+     * Jde přesně tou cestou, kterou dotaz staví findBy(), včetně převodu hodnot.
      * @param mixed[]|null $values
      * @return array<string, mixed>
      */
     public function buildQuery(string $condition, ?array $values = null): array
     {
-        return $this->parseWhereCondition($condition, $values);
+        return $this->compileWhereCondition($condition, $values);
     }
 
 
@@ -55,32 +55,30 @@ final class TestableElasticsearchClient extends ElasticsearchClient
 
     public int $fakeCount = 0;
 
-    /** @var array<string, mixed>|null poslední sestavený dotaz */
+    /** @var array<string, mixed>|null poslední odeslaný dotaz */
     public ?array $lastRequest = null;
 
 
     /**
+     * Odpověď se podstrčí až na hranici odesílání, aby se dotaz opravdu sestavil
+     * a testy viděly to, co by šlo do Elasticsearch.
+     * @param array<string, mixed> $request
      * @return mixed[]
      */
-    protected function executeSearch(
-        string $tableName,
-        FindByParams $params,
-        ?callable $modifyParamsCallback,
-    ): array
+    protected function sendSearch(array $request): array
     {
-        $this->lastRequest = ['index' => $tableName];
+        $this->lastRequest = $request;
 
         return $this->fakeResponse;
     }
 
 
-    protected function executeCount(
-        string $tableName,
-        FindByParams $params,
-        ?callable $modifyParamsCallback,
-    ): int
+    /**
+     * @param array<string, mixed> $request
+     */
+    protected function sendCount(array $request): int
     {
-        $this->lastRequest = ['index' => $tableName];
+        $this->lastRequest = $request;
 
         return $this->fakeCount;
     }

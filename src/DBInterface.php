@@ -86,6 +86,16 @@ interface DBInterface
 
 
     /**
+     * Vrátí počet záznamů odpovídajících daným kritériím.
+     * @param string $tableName
+     * @param array<string, mixed> $params
+     * @return int Počet nalezených záznamů
+     * @throws Throwable
+     */
+    public function count(string $tableName, array $params = []): int;
+
+
+    /**
      * Překonvertuje některé datové typy pro databázi.
      * @param array<string, mixed> $data Sloupec -> hodnota
      * @return array<string, mixed> Sloupec -> upravená hodnota

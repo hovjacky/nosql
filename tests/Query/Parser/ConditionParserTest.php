@@ -70,6 +70,11 @@ final class ConditionParserTest extends TestCase
         yield 'dvě skupiny' => ['(a OR b) AND (c OR d)', 'AND(OR(a, b), OR(c, d))'];
         yield 'skupina a dva výrazy' => ['(a OR b) AND c AND d', 'AND(OR(a, b), c, d)'];
         yield 'dva výrazy a skupina' => ['a AND b AND (c OR d)', 'AND(a, b, OR(c, d))'];
+
+        // Přednost platí i tam, kde se závorky mísí s nezávorkovanými spojkami.
+        // Původní parser tuhle podmínku počítal jako `a AND (b OR c)`, viz README.
+        yield 'skupina, AND a OR' => ['(a) AND b OR c', 'OR(AND(a, b), c)'];
+        yield 'OR a skupina v AND' => ['a OR b AND (c)', 'OR(a, AND(b, c))'];
     }
 
 
@@ -92,6 +97,7 @@ final class ConditionParserTest extends TestCase
         yield 'OR na začátku' => ['OR a'];
         yield 'dvě spojky za sebou' => ['a AND OR b'];
         yield 'prázdné závorky' => ['()'];
+        yield 'jen prázdné závorky vedle sebe' => ['() ()'];
     }
 
 
@@ -104,9 +110,27 @@ final class ConditionParserTest extends TestCase
     }
 
 
-    public function testEmptyGroupIsSkipped(): void
+    /**
+     * Prázdnou skupinu generují stavitelé podmínek, když jim skupina filtrů vyjde prázdná.
+     * Ať je kdekoliv, chová se, jako by tam nebyla.
+     * @return iterable<string, array{string, string}>
+     */
+    public static function emptyGroupProvider(): iterable
     {
-        self::assertSame('a', self::describe(self::parse('() a')));
+        yield 'na začátku' => ['() a', 'a'];
+        yield 'na konci' => ['a AND ()', 'a'];
+        yield 'na konci za skupinou' => ['(a) AND ()', 'a'];
+        yield 'na konci u OR' => ['a OR ()', 'a'];
+        yield 'na začátku před spojkou' => ['() AND a', 'a'];
+        yield 'uprostřed' => ['a AND () AND b', 'AND(a, b)'];
+        yield 'obě strany' => ['() a AND ()', 'a'];
+    }
+
+
+    #[DataProvider('emptyGroupProvider')]
+    public function testEmptyGroupIsSkipped(string $query, string $expected): void
+    {
+        self::assertSame($expected, self::describe(self::parse($query)));
     }
 
 
@@ -130,5 +154,19 @@ final class ConditionParserTest extends TestCase
         $inner = $nested->operands[0];
         self::assertInstanceOf(OrNode::class, $inner);
         self::assertTrue($inner->wrapOperands);
+    }
+
+
+    /**
+     * Rozhoduje se pro celý úsek OR najednou, ne pro každý operand zvlášť - jinak by
+     * se v jednom OR míchaly skórované a neskórované větve.
+     */
+    public function testWrapOperandsIsDecidedForTheWholeOrSpan(): void
+    {
+        $mixed = self::parse('(a) OR b OR c');
+
+        self::assertInstanceOf(OrNode::class, $mixed);
+        self::assertCount(3, $mixed->operands);
+        self::assertFalse($mixed->wrapOperands);
     }
 }

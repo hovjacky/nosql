@@ -78,6 +78,18 @@ final class TracyLoggerTest extends TestCase
     }
 
 
+    /**
+     * Hodnota, která sama vypadá jako placeholder, se nesmí dosadit podruhé - jinak by
+     * se do zprávy tiše propsala hodnota, kterou tam volající nedal.
+     */
+    public function testValueLookingLikeAPlaceholderIsNotSubstitutedAgain(): void
+    {
+        $this->logger->error('Dotaz {query}', ['query' => 'SELECT {secret}', 'secret' => 'hunter2']);
+
+        self::assertSame("Dotaz SELECT {secret}\n  secret: hunter2", $this->tracy->records[0]['value']);
+    }
+
+
     public function testContextWithoutPlaceholderIsAppended(): void
     {
         $this->logger->error('Neočekávaná odpověď.', ['status' => 500]);

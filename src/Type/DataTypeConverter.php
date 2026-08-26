@@ -3,6 +3,7 @@
 namespace Hovjacky\NoSQL\Type;
 
 use DateTime;
+use DateTimeInterface;
 use Throwable;
 
 /**
@@ -10,6 +11,8 @@ use Throwable;
  *
  * Chování je záměrně shodné s původními metodami convertToDBDataTypes()/convertFromDBDataTypes()
  * na klientovi - ty na tuto třídu už jen delegují, aby zůstaly součástí veřejného API.
+ * Do vnořených polí se ale zanořují ony samy, aby se jejich případné přepsání v potomkovi
+ * uplatnilo na celý dokument, ne jen na jeho první úroveň.
  */
 final class DataTypeConverter
 {
@@ -33,17 +36,21 @@ final class DataTypeConverter
     {
         foreach ($data as $key => $value)
         {
-            if ($value instanceof DateTime)
-            {
-                $data[$key] = $value->format('c');
-            }
-            elseif (is_array($value))
-            {
-                $data[$key] = $this->toDatabase($value);
-            }
+            $data[$key] = is_array($value) ? $this->toDatabase($value) : $this->valueToDatabase($value);
         }
 
         return $data;
+    }
+
+
+    /**
+     * Převede jednu hodnotu (ne pole) na hodnotu, které rozumí Elasticsearch.
+     */
+    public function valueToDatabase(mixed $value): mixed
+    {
+        // DateTimeImmutable je stejně dobré datum jako DateTime - putValuesIntoQuery()
+        // pouští do podmínek obojí, takže se obojí musí i převést.
+        return $value instanceof DateTimeInterface ? $value->format('c') : $value;
     }
 
 
@@ -57,17 +64,24 @@ final class DataTypeConverter
     {
         foreach ($data as $key => $value)
         {
-            if (is_array($value))
-            {
-                $data[$key] = $this->fromDatabase($value);
-            }
-            elseif (is_string($value) && self::looksLikeDate($value))
-            {
-                $data[$key] = new DateTime($value);
-            }
+            $data[$key] = is_array($value) ? $this->fromDatabase($value) : $this->valueFromDatabase($value);
         }
 
         return $data;
+    }
+
+
+    /**
+     * Převede jednu hodnotu (ne pole) z Elasticsearch na PHP typ.
+     */
+    public function valueFromDatabase(mixed $value): mixed
+    {
+        if (!is_string($value) || !self::looksLikeDate($value))
+        {
+            return $value;
+        }
+
+        return self::toDateTime($value) ?? $value;
     }
 
 
@@ -75,5 +89,28 @@ final class DataTypeConverter
     {
         return preg_match(self::DATE_PATTERN, $value) === 1
             || preg_match(self::DATE_TIME_PATTERN, $value) === 1;
+    }
+
+
+    /**
+     * Vrátí datum, nebo null, pokud hodnota datum jen připomíná.
+     *
+     * Vzory pouštějí dál i nesmysly jako `2024-19-31` nebo `2024-02-30`; na prvním
+     * `new DateTime()` spadne, druhé tiše přeteče do března. Ani jedno není datum,
+     * které by knihovna zapsala, takže se taková hodnota vrací jako text.
+     */
+    private static function toDateTime(string $value): ?DateTime
+    {
+        try
+        {
+            $date = new DateTime($value);
+        }
+        catch(Throwable)
+        {
+            return null;
+        }
+
+        // Oba vzory začínají datem `YYYY-MM-DD`; když z něj vzniklo jiné, hodnota přetekla.
+        return $date->format('Y-m-d') === substr($value, 0, 10) ? $date : null;
     }
 }

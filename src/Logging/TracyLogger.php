@@ -70,25 +70,31 @@ final class TracyLogger extends AbstractLogger
     /**
      * Doplní do zprávy PSR-3 placeholdery `{klíč}`. Hodnoty, pro které zpráva
      * placeholder nemá, připojí čitelně za ni, aby se žádný kontext neztratil.
+     *
+     * Nahrazuje se jedním průchodem: kdyby se dosazovalo postupně, hodnota obsahující
+     * `{jiný klíč}` by se sama stala placeholderem a ten klíč by se v ní tiše dosadil.
      * @param mixed[] $context
      */
     private static function format(string $message, array $context): string
     {
+        $replacements = [];
+        $rest = '';
+
         foreach ($context as $key => $value)
         {
             $placeholder = '{' . $key . '}';
 
             if (str_contains($message, $placeholder))
             {
-                $message = str_replace($placeholder, self::valueToString($value), $message);
+                $replacements[$placeholder] = self::valueToString($value);
             }
             else
             {
-                $message .= "\n  " . $key . ': ' . self::valueToString($value);
+                $rest .= "\n  " . $key . ': ' . self::valueToString($value);
             }
         }
 
-        return $message;
+        return strtr($message, $replacements) . $rest;
     }
 
 

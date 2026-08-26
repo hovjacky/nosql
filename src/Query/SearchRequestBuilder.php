@@ -10,6 +10,18 @@ use Hovjacky\NoSQL\DB;
  */
 final class SearchRequestBuilder
 {
+    /** Název agregace, kterou se počítají skupiny GROUP BY. */
+    public const GROUP_COUNT_AGGREGATION = 'group_count';
+
+
+    /**
+     * Přesnost agregace `cardinality`, kterou se počítají skupiny GROUP BY.
+     * Do tohoto počtu odlišných hodnot je výsledek přesný, výš je odhad. 40000 je maximum,
+     * které Elasticsearch dovolí.
+     */
+    private const CARDINALITY_PRECISION = 40000;
+
+
     /**
      * @param int $defaultLimit limit použitý, pokud volající žádný neuvede
      */
@@ -24,6 +36,12 @@ final class SearchRequestBuilder
      */
     public function build(string $tableName, FindByParams $params, Closure $whereCompiler): array
     {
+        // Počet skupin se nedá spočítat z vrácených bucketů, těch chodí jen `size`.
+        if ($params->count && $params->groupBy !== null)
+        {
+            return $this->buildGroupCountRequest($tableName, $params, $whereCompiler);
+        }
+
         $request = [
             'index' => $tableName,
             'body' => [],
@@ -41,17 +59,63 @@ final class SearchRequestBuilder
 
 
     /**
-     * Dotaz na počet záznamů. Endpoint `_count` parametr `size` nepodporuje.
+     * Dotaz na počet záznamů pro endpoint `_count`.
+     *
+     * Ten v těle přijímá jedinou položku, `query`; `size`, `from` ani `aggs` by odmítl
+     * s chybou 400, proto se dotaz nestaví z build(), ale samostatně.
      * @param Closure(string, mixed[]|null): array<string, mixed> $whereCompiler
      * @return array<string, mixed>
      */
     public function buildCountRequest(string $tableName, FindByParams $params, Closure $whereCompiler): array
     {
-        $request = $this->build($tableName, $params, $whereCompiler);
+        $request = [
+            'index' => $tableName,
+            'body' => [],
+        ];
 
-        unset($request['body']['size']);
+        $this->applyWhere($request, $params, $whereCompiler);
 
         return $request;
+    }
+
+
+    /**
+     * Dotaz na počet skupin GROUP BY.
+     *
+     * Buckety by se musely spočítat všechny, jenže `terms` jich vrátí nejvýš `size`
+     * a zbytek jen přičte do `sum_other_doc_count`. Přesný počet skupin proto zjišťuje
+     * agregace `cardinality`, tedy obdoba `COUNT(DISTINCT sloupec)`.
+     * @param Closure(string, mixed[]|null): array<string, mixed> $whereCompiler
+     * @return array<string, mixed>
+     */
+    private function buildGroupCountRequest(string $tableName, FindByParams $params, Closure $whereCompiler): array
+    {
+        $request = [
+            'index' => $tableName,
+            'body' => [],
+        ];
+
+        $this->applyWhere($request, $params, $whereCompiler);
+
+        // Samotné záznamy nás nezajímají, jen počet skupin.
+        $request['body']['size'] = 0;
+        $request['body']['aggs'][self::GROUP_COUNT_AGGREGATION]['cardinality']
+            = $this->groupSource($params) + ['precision_threshold' => self::CARDINALITY_PRECISION];
+
+        return $request;
+    }
+
+
+    /**
+     * Podle čeho se seskupuje - sloupec, nebo skript.
+     * @return array<string, mixed>
+     */
+    private function groupSource(FindByParams $params): array
+    {
+        // Je možné v groupBy uvést "script" a definovat skript v groupByScript
+        return $params->groupBy !== 'script' || $params->groupByScript === null
+            ? ['field' => $params->groupBy]
+            : ['script' => $params->groupByScript];
     }
 
 
@@ -163,14 +227,10 @@ final class SearchRequestBuilder
             return;
         }
 
-        // Je možné v groupBy uvést "script" a definovat skript v groupByScript
-        if ($params->groupBy !== 'script' || $params->groupByScript === null)
+        // Doplňuje se k případnému `size`, které nastavil applyLimit().
+        foreach ($this->groupSource($params) as $key => $value)
         {
-            $request['body']['aggs']['group_by']['terms']['field'] = $params->groupBy;
-        }
-        else
-        {
-            $request['body']['aggs']['group_by']['terms']['script'] = $params->groupByScript;
+            $request['body']['aggs']['group_by']['terms'][$key] = $value;
         }
 
         if ($params->orderBy === [])

@@ -36,7 +36,9 @@ final class SearchResultMapper
     {
         if ($params->groupBy !== null)
         {
-            return $this->mapBuckets($response, $params, $rowConverter);
+            return $params->count
+                ? self::mapGroupCount($response)
+                : $this->mapBuckets($response, $params, $rowConverter);
         }
 
         if ($params->aggregation !== [])
@@ -49,21 +51,27 @@ final class SearchResultMapper
 
 
     /**
+     * Počet skupin GROUP BY z agregace `cardinality` (viz SearchRequestBuilder).
+     *
+     * Buckety se počítat nedají - `terms` jich vrátí jen tolik, kolik se jich vyžádalo.
+     * @phpstan-ignore missingType.iterableValue
+     */
+    private static function mapGroupCount(array $response): int
+    {
+        return (int) ($response['aggregations'][SearchRequestBuilder::GROUP_COUNT_AGGREGATION]['value'] ?? 0);
+    }
+
+
+    /**
      * Výsledky seskupené přes GROUP BY, tj. buckets agregace `group_by`.
      * @param Closure(mixed[]): mixed[] $rowConverter
-     * @return array<int, array<string, mixed>>|int
+     * @return array<int, array<string, mixed>>
      * @throws Throwable
      * @phpstan-ignore missingType.iterableValue
      */
-    private function mapBuckets(array $response, FindByParams $params, Closure $rowConverter): array|int
+    private function mapBuckets(array $response, FindByParams $params, Closure $rowConverter): array
     {
         $buckets = $response['aggregations']['group_by']['buckets'];
-
-        // Pokud zjišťujeme pouze počet záznamů, zajímá nás počet buckets
-        if ($params->count)
-        {
-            return count($buckets);
-        }
 
         $results = [];
 

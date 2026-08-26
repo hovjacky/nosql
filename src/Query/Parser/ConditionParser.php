@@ -16,9 +16,16 @@ use Hovjacky\NoSQL\Query\Parser\Ast\OrNode;
  *     or      := and (OR and)*
  *     and     := primary (AND primary)*
  *     primary := '(' or ')' | výraz
+ *
+ * Původní parser skládal dotaz řezáním řetězce a v podmínkách, kde se závorky mísí
+ * s nezávorkovanými spojkami, přednost nedodržel (`(a) AND b OR c` počítal jako
+ * `a AND (b OR c)`). Tady platí přednost SQL vždy, viz README.
  */
 final class ConditionParser
 {
+    private const ERROR_INCOMPLETE = 'Neúplná podmínka - očekáván výraz.';
+
+
     /** @var list<Token> */
     private array $tokens;
 
@@ -49,28 +56,38 @@ final class ConditionParser
             throw new DBException(DB::ERROR_BOOLEAN_WRONG_NUMBER_OF_PARENTHESES);
         }
 
+        // Podmínka složená jen z prázdných závorek nemá co filtrovat.
+        if ($node === null)
+        {
+            throw new DBException(self::ERROR_INCOMPLETE);
+        }
+
         return $node;
     }
 
 
     /**
+     * Vrací null, pokud celý úsek tvořily jen prázdné závorky.
      * @throws DBException
      * @phpstan-impure posouvá $this->position
      */
-    private function parseOr(): Node
+    private function parseOr(): ?Node
     {
         $start = $this->position;
-        $operands = [$this->parseAnd()];
+        $operands = [];
+
+        $this->collect($operands, $this->parseAnd());
 
         while ($this->peek()?->type === TokenType::Or_)
         {
             $this->position++;
-            $operands[] = $this->parseAnd();
+
+            $this->collect($operands, $this->parseAnd());
         }
 
-        if (count($operands) === 1)
+        if (count($operands) < 2)
         {
-            return $operands[0];
+            return $operands[0] ?? null;
         }
 
         return new OrNode($operands, !$this->spanHasParentheses($start, $this->position));
@@ -78,34 +95,44 @@ final class ConditionParser
 
 
     /**
+     * Vrací null, pokud celý úsek tvořily jen prázdné závorky.
      * @throws DBException
      * @phpstan-impure posouvá $this->position
      */
-    private function parseAnd(): Node
+    private function parseAnd(): ?Node
     {
-        $operands = [$this->parsePrimary()];
+        $operands = [];
+
+        $this->collect($operands, $this->parsePrimary());
 
         while ($this->peek()?->type === TokenType::And_)
         {
             $this->position++;
-            $operands[] = $this->parsePrimary();
+
+            $this->collect($operands, $this->parsePrimary());
         }
 
-        return count($operands) === 1 ? $operands[0] : new AndNode($operands);
+        if (count($operands) < 2)
+        {
+            return $operands[0] ?? null;
+        }
+
+        return new AndNode($operands);
     }
 
 
     /**
+     * Vrací null pro prázdné závorky, které se v podmínce chovají, jako by tam nebyly.
      * @throws DBException
      * @phpstan-impure posouvá $this->position
      */
-    private function parsePrimary(): Node
+    private function parsePrimary(): ?Node
     {
         $token = $this->peek();
 
         if ($token === null)
         {
-            throw new DBException('Neúplná podmínka - očekáván výraz.');
+            throw new DBException(self::ERROR_INCOMPLETE);
         }
 
         if ($token->type === TokenType::Expression)
@@ -120,11 +147,13 @@ final class ConditionParser
             $this->position++;
 
             // Prázdné závorky nemají co vracet, přeskočíme je jako by tam nebyly.
+            // Podmínka je tvoří i na kraji (`a = 1 AND ()`), tak je generují stavitelé
+            // podmínek, když jim skupina filtrů vyjde prázdná.
             if ($this->peek()?->type === TokenType::ClosingParenthesis)
             {
                 $this->position++;
 
-                return $this->parsePrimary();
+                return $this->startsPrimary($this->peek()) ? $this->parsePrimary() : null;
             }
 
             $node = $this->parseOr();
@@ -139,7 +168,30 @@ final class ConditionParser
             return $node;
         }
 
-        throw new DBException('Neúplná podmínka - očekáván výraz.');
+        throw new DBException(self::ERROR_INCOMPLETE);
+    }
+
+
+    /**
+     * Přidá operand, pokud nějaký vznikl (prázdné závorky žádný nedávají).
+     * @param list<Node> $operands
+     */
+    private function collect(array &$operands, ?Node $node): void
+    {
+        if ($node !== null)
+        {
+            $operands[] = $node;
+        }
+    }
+
+
+    /**
+     * Může tímto tokenem začínat výraz?
+     */
+    private function startsPrimary(?Token $token): bool
+    {
+        return $token !== null
+            && ($token->type === TokenType::Expression || $token->type === TokenType::OpeningParenthesis);
     }
 
 

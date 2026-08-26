@@ -234,9 +234,10 @@ final class FindByParams
 
     /**
      * Limit a offset dávají smysl jen jako kladná čísla, cokoliv jiného bereme jako neuvedené.
+     * Záporné číslo by Elasticsearch odmítl s chybou 400, takže se zahazuje také.
      */
     private static function toPositiveInt(mixed $value): ?int
     {
-        return !empty($value) && is_numeric($value) ? (int) $value : null;
+        return is_numeric($value) && (int) $value > 0 ? (int) $value : null;
     }
 }

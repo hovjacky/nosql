@@ -10,6 +10,10 @@ use Hovjacky\NoSQL\DBException;
  *
  * Uvnitř SQL literálu v apostrofech (např. `name LIKE '%a AND b%'`) se závorky ani spojky
  * jako oddělovače neberou - literál je pro tokenizer jeden nedělitelný kus textu.
+ *
+ * Spojka se bere jako spojka jen tam, kde ji od okolí odděluje mezera nebo závorka.
+ * Hodnota `[CA,OR,WA]` ani `ABC-AND-123` tedy dotaz nerozdělí, stejně jako je nerozdělil
+ * původní parser, který hledal doslova ` AND ` a ` OR `.
  */
 final class Tokenizer
 {
@@ -102,7 +106,7 @@ final class Tokenizer
      */
     private static function keywordAt(string $query, int $position): ?string
     {
-        if ($position > 0 && self::isWordCharacter($query[$position - 1]))
+        if ($position > 0 && !self::isBoundary($query[$position - 1]))
         {
             return null;
         }
@@ -116,7 +120,7 @@ final class Tokenizer
                 continue;
             }
 
-            if ($end < strlen($query) && self::isWordCharacter($query[$end]))
+            if ($end < strlen($query) && !self::isBoundary($query[$end]))
             {
                 continue;
             }
@@ -128,10 +132,13 @@ final class Tokenizer
     }
 
 
-    private static function isWordCharacter(string $char): bool
+    /**
+     * Odděluje tenhle znak spojku od okolí? Cokoliv jiného než mezera a závorka je
+     * součástí hodnoty, ne struktury dotazu - `sku = ABC-AND-123` je jeden výraz.
+     */
+    private static function isBoundary(string $char): bool
     {
-        // Bajty nad ASCII patří do vícebajtových znaků, tedy také do "slova".
-        return $char === '_' || ctype_alnum($char) || ord($char) >= 0x80;
+        return $char === '(' || $char === ')' || ctype_space($char);
     }
 
 

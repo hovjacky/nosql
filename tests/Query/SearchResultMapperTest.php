@@ -198,17 +198,27 @@ final class SearchResultMapperTest extends TestCase
     }
 
 
-    public function testCountWithGroupByReturnsNumberOfBuckets(): void
+    /**
+     * Počet skupin nese agregace `cardinality`. Buckety se počítat nedají - `terms`
+     * jich vrátí jen tolik, kolik se jich vyžádalo, zbytek zůstane v sum_other_doc_count.
+     */
+    public function testCountWithGroupByReadsCardinalityAggregation(): void
     {
         self::assertSame(
-            2,
+            250000,
             $this->map(
-                ['aggregations' => ['group_by' => ['buckets' => [
-                    ['key' => 'a', 'doc_count' => 1],
-                    ['key' => 'b', 'doc_count' => 2],
-                ]]]],
+                ['aggregations' => [
+                    'group_count' => ['value' => 250000],
+                    'group_by' => ['buckets' => [['key' => 'a', 'doc_count' => 1]]],
+                ]],
                 ['groupBy' => 'name', 'count' => true],
             ),
         );
+    }
+
+
+    public function testCountWithGroupByIsZeroWhenAggregationIsMissing(): void
+    {
+        self::assertSame(0, $this->map(['aggregations' => []], ['groupBy' => 'name', 'count' => true]));
     }
 }

@@ -752,10 +752,10 @@
         "body": {
             "size": 0,
             "aggs": {
-                "group_by": {
-                    "terms": {
-                        "size": 100,
-                        "field": "n"
+                "group_count": {
+                    "cardinality": {
+                        "field": "n",
+                        "precision_threshold": 40000
                     }
                 }
             }

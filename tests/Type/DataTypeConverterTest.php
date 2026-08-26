@@ -3,6 +3,7 @@
 namespace Hovjacky\NoSQL\Tests\Type;
 
 use DateTime;
+use DateTimeImmutable;
 use Hovjacky\NoSQL\Type\DataTypeConverter;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -24,6 +25,18 @@ final class DataTypeConverterTest extends TestCase
     public function testDateTimeIsFormattedForDatabase(): void
     {
         $date = new DateTime('2024-01-31T12:00:00+00:00');
+
+        self::assertSame(['created' => '2024-01-31T12:00:00+00:00'], $this->converter->toDatabase(['created' => $date]));
+    }
+
+
+    /**
+     * DateTimeImmutable je stejně dobré datum jako DateTime - putValuesIntoQuery()
+     * pouští do podmínek obojí.
+     */
+    public function testDateTimeImmutableIsFormattedForDatabase(): void
+    {
+        $date = new DateTimeImmutable('2024-01-31T12:00:00+00:00');
 
         self::assertSame(['created' => '2024-01-31T12:00:00+00:00'], $this->converter->toDatabase(['created' => $date]));
     }
@@ -125,6 +138,34 @@ final class DataTypeConverterTest extends TestCase
     public function testRecognizedDateFormats(string $value): void
     {
         self::assertInstanceOf(DateTime::class, $this->converter->fromDatabase(['x' => $value])['x']);
+    }
+
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function impossibleDateProvider(): iterable
+    {
+        // Vzory pouštějí dál i data, která neexistují. Na některých `new DateTime()` spadne...
+        yield 'měsíc 19' => ['2024-19-31'];
+        yield 'měsíc 13' => ['2024-13-01'];
+        yield 'den 39' => ['2024-01-39'];
+        // ...jiná tiše přetečou do dalšího měsíce.
+        yield 'nulové datum' => ['2024-00-00'];
+        yield '30. února' => ['2024-02-30'];
+        yield 'den 32' => ['2024-01-32'];
+        yield '31. dubna s časem' => ['2024-04-31T10:00'];
+    }
+
+
+    /**
+     * Datum, které neexistuje, knihovna nezapsala - vrátí se jako text, ne jako výjimka
+     * a ne jako tiše posunuté datum.
+     */
+    #[DataProvider('impossibleDateProvider')]
+    public function testImpossibleDateStaysAString(string $value): void
+    {
+        self::assertSame(['x' => $value], $this->converter->fromDatabase(['x' => $value]));
     }
 
 

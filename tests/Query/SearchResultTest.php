@@ -58,4 +58,19 @@ final class SearchResultTest extends TestCase
     {
         self::assertNull((new SearchResult([], null, []))->total);
     }
+
+
+    /**
+     * Elasticsearch ve výchozím nastavení počítá shody jen do 10 000 a dál hlásí `gte`.
+     * Stránkovadlo postavené na takovém čísle by ukazovalo nesmysl, proto se dá poznat.
+     */
+    public function testTotalKnowsWhetherItIsExact(): void
+    {
+        self::assertTrue((new SearchResult([], 17, [], 'eq'))->isTotalExact());
+        self::assertFalse((new SearchResult([], 10000, [], 'gte'))->isTotalExact());
+        self::assertFalse((new SearchResult([], null, [], null))->isTotalExact());
+
+        // Starší odpovědi relaci neuvádějí, tam se počtu věří.
+        self::assertTrue((new SearchResult([], 17, []))->isTotalExact());
+    }
 }

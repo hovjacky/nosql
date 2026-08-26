@@ -159,6 +159,21 @@ final class FindByParamsTest extends TestCase
     }
 
 
+    /**
+     * Záporný limit ani offset nedávají smysl a Elasticsearch by je odmítl chybou 400,
+     * takže se berou jako neuvedené.
+     */
+    public function testNegativeLimitAndOffsetAreIgnored(): void
+    {
+        $params = FindByParams::fromArray(['limit' => -5, 'offset' => -1]);
+
+        self::assertNull($params->limit);
+        self::assertNull($params->offset);
+
+        self::assertNull(FindByParams::fromArray(['limit' => '-5'])->limit);
+    }
+
+
     public function testToArrayLeavesLimitTypeUntouched(): void
     {
         // Typovaný přístup limit přetypuje, původní tvar pro checkAndRepairParams zůstává beze změny.

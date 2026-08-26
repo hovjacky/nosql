@@ -16,6 +16,13 @@ use Throwable;
  *
  * Očekávané dotazy v tests/fixtures/find_by_requests.json byly pořízeny z implementace
  * před vytažením SearchRequestBuilderu, takže hlídají, že se chování nezměnilo.
+ *
+ * Výjimkou je pár případů, kde se chování změnit mělo a fixture drží nový tvar:
+ *  - `limit_string`, `limit_string_offset` - `limit`/`offset` zadané jako číselný text
+ *    se posílají jako čísla, dřív šla do dotazu ta „desítka“ v uvozovkách,
+ *  - `offset_nonnumeric` - nečíselný offset se zahazuje, dřív se poslal, jak přišel,
+ *  - `agg_int_column` - název sloupce agregace je vždy text,
+ *  - `group_internal_nocnt` - počet skupin počítá agregace `cardinality`, ne `terms`.
  */
 final class SearchRequestBuilderTest extends TestCase
 {

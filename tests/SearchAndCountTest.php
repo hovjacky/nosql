@@ -24,7 +24,7 @@ final class SearchAndCountTest extends TestCase
      * @param list<array{string, array<string, mixed>}> $rows
      * @return array<string, mixed>
      */
-    private static function hits(array $rows, ?int $total = null): array
+    private static function hits(array $rows, ?int $total = null, string $relation = 'eq'): array
     {
         $response = ['hits' => ['hits' => array_map(
             static fn (array $row): array => ['_id' => $row[0], '_source' => $row[1]],
@@ -33,7 +33,7 @@ final class SearchAndCountTest extends TestCase
 
         if ($total !== null)
         {
-            $response['hits']['total'] = ['value' => $total, 'relation' => 'eq'];
+            $response['hits']['total'] = ['value' => $total, 'relation' => $relation];
         }
 
         return $response;
@@ -51,6 +51,50 @@ final class SearchAndCountTest extends TestCase
         self::assertSame(42, $result->total);
         self::assertSame($this->client->fakeResponse, $result->response);
         self::assertSame(2, $result->countRows());
+    }
+
+
+    /**
+     * Elasticsearch ve výchozím nastavení přestává počítat na 10 000 shodách a dál hlásí
+     * jen `10000, gte`. Stránkovadlo postavené na takovém čísle by ukazovalo nesmysl,
+     * proto musí jít poznat, že je číslo jen dolní mez.
+     */
+    public function testSearchSaysWhetherTotalIsExact(): void
+    {
+        $this->client->fakeResponse = self::hits([['1', ['name' => 'Jan']]], 42);
+
+        self::assertTrue($this->client->search('lidi', [])->isTotalExact());
+
+        $this->client->fakeResponse = self::hits([['1', ['name' => 'Jan']]], 10000, 'gte');
+
+        $result = $this->client->search('lidi', []);
+
+        self::assertSame(10000, $result->total);
+        self::assertSame('gte', $result->totalRelation);
+        self::assertFalse($result->isTotalExact());
+    }
+
+
+    /**
+     * Odpověď se testům podstrčí až na hranici odesílání, takže se dotaz opravdu sestaví.
+     */
+    public function testSearchSendsTheBuiltRequest(): void
+    {
+        $this->client->fakeResponse = self::hits([]);
+
+        $this->client->search('lidi', ['where' => ['age > ?' => 18], 'limit' => 10, 'offset' => 5]);
+
+        self::assertSame(
+            [
+                'index' => 'lidi',
+                'body' => [
+                    'query' => ['bool' => ['filter' => [['range' => ['age' => ['gt' => 18]]]]]],
+                    'size' => 10,
+                    'from' => 5,
+                ],
+            ],
+            $this->client->lastRequest,
+        );
     }
 
 
@@ -118,17 +162,50 @@ final class SearchAndCountTest extends TestCase
 
 
     /**
-     * S GROUP BY se počítají buckets, tedy se prochází běžná odpověď vyhledávání.
+     * S GROUP BY se počet skupin zjišťuje agregací `cardinality` nad běžným vyhledáváním,
+     * protože `terms` vrátí jen tolik bucketů, kolik se jich vyžádalo.
      */
-    public function testCountWithGroupByCountsBuckets(): void
+    public function testCountWithGroupByAsksForCardinalityOfGroups(): void
     {
-        $this->client->fakeResponse = ['aggregations' => ['group_by' => ['buckets' => [
-            ['key' => 'a', 'doc_count' => 1],
-            ['key' => 'b', 'doc_count' => 2],
-            ['key' => 'c', 'doc_count' => 3],
-        ]]]];
+        $this->client->fakeResponse = ['aggregations' => ['group_count' => ['value' => 250000]]];
 
-        self::assertSame(3, $this->client->count('lidi', ['groupBy' => 'name']));
+        self::assertSame(250000, $this->client->count('lidi', ['groupBy' => 'name']));
+
+        self::assertSame(
+            [
+                'size' => 0,
+                'aggs' => ['group_count' => ['cardinality' => ['field' => 'name', 'precision_threshold' => 40000]]],
+            ],
+            $this->client->lastRequest['body'] ?? null,
+        );
+    }
+
+
+    /**
+     * Dotaz na `_count` snese v těle jen `query`; `from` ani `aggs` by Elasticsearch odmítl.
+     */
+    public function testCountRequestContainsNothingButTheQuery(): void
+    {
+        $this->client->count('lidi', [
+            'where' => ['age > ?' => 18],
+            'limit' => 10,
+            'offset' => 5,
+            'fields' => ['id'],
+            'aggregation' => ['max' => ['age']],
+        ]);
+
+        self::assertSame(
+            ['index' => 'lidi', 'body' => ['query' => ['bool' => ['filter' => [['range' => ['age' => ['gt' => 18]]]]]]]],
+            $this->client->lastRequest,
+        );
+    }
+
+
+    public function testCountRequestWithoutWhereHasEmptyBody(): void
+    {
+        $this->client->count('lidi', ['limit' => 10, 'offset' => 5]);
+
+        self::assertSame(['index' => 'lidi', 'body' => []], $this->client->lastRequest);
     }
 
 

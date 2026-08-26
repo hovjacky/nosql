@@ -55,6 +55,25 @@ final class TokenizerTest extends TestCase
         yield 'ORDER není OR' => ['ORDER = 1', ['expr(ORDER = 1)']];
         yield 'malé and se nebere' => ['a = 1 and b = 2', ['expr(a = 1 and b = 2)']];
 
+        // Spojku musí od okolí oddělovat mezera nebo závorka, jinak je součástí hodnoty.
+        yield 'AND v seznamu' => ['country IN [AND,FRA]', ['expr(country IN [AND,FRA])']];
+        yield 'OR v seznamu' => ['state IN [CA,OR,WA]', ['expr(state IN [CA,OR,WA])']];
+        yield 'AND ve spojovníku' => ['sku = ABC-AND-123', ['expr(sku = ABC-AND-123)']];
+        yield 'AND v tečkách' => ['email = a.AND.b@x.cz', ['expr(email = a.AND.b@x.cz)']];
+        yield 'OR v cestě' => ['path = /var/OR/log', ['expr(path = /var/OR/log)']];
+        yield 'AND v LIKE vzoru' => ['name LIKE %AND%', ['expr(name LIKE %AND%)']];
+        yield 'AND v URL' => [
+            'url CROSS FIELDS http://x/AND/y',
+            ['expr(url CROSS FIELDS http://x/AND/y)'],
+        ];
+
+        // Závorka spojku oddělí i bez mezery.
+        yield 'spojka mezi závorkami' => [
+            '(a = 1)AND(b = 2)',
+            ['OpeningParenthesis', 'expr(a = 1)', 'ClosingParenthesis', 'And_',
+                'OpeningParenthesis', 'expr(b = 2)', 'ClosingParenthesis'],
+        ];
+
         // Literál v apostrofech je nedělitelný.
         yield 'AND v literálu' => ["name LIKE '%a AND b%'", ["expr(name LIKE '%a AND b%')"]];
         yield 'závorka v literálu' => ["name LIKE '%(x)%'", ["expr(name LIKE '%(x)%')"]];

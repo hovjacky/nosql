@@ -2,36 +2,46 @@
 
 namespace Hovjacky\NoSQL;
 
-use DateTime;
+use Closure;
+use DateTimeInterface;
 use Elastic\Elasticsearch\Client;
 use Elastic\Elasticsearch\ClientBuilder;
 use Elastic\Elasticsearch\Exception\ClientResponseException;
 use Elastic\Elasticsearch\Response\Elasticsearch;
+use Hovjacky\NoSQL\Query\FindByParams;
+use Hovjacky\NoSQL\Query\SearchRequestBuilder;
+use Hovjacky\NoSQL\Query\SearchResult;
+use Hovjacky\NoSQL\Query\SearchResultMapper;
+use Hovjacky\NoSQL\Type\DataTypeConverter;
 use Http\Promise\Promise;
+use Stringable;
 use Throwable;
-use Tracy\Debugger;
 use stdClass;
 
-/**
- * Class ElasticsearchClient
- * @package Hovjacky\NoSQL
- */
 class ElasticsearchClient extends DBWithBooleanParsing
 {
-    /** @var Client */
     private Client $client;
 
     /** @var callable(string $value): string|null */
     private $wildcardValueFilter = null;
 
+    /** @var array<string, mixed> hodnoty právě parsované where podmínky (klíč = značka `#n#`) */
+    private array $boundValues = [];
 
-    /** @var int výchozí limit vrácených položek z elasticu */
+    private ?SearchRequestBuilder $requestBuilder = null;
+
+    private ?SearchResultMapper $resultMapper = null;
+
+    private ?DataTypeConverter $dataTypeConverter = null;
+
+
+    /** Výchozí limit vrácených položek z elasticu. */
     public const DEFAULT_LIMIT = 100;
 
-    /** @var int Tímto se to bude chovat jako SQL, vrátí jeden záznam pro jednu GROUP BY hodnotu, ale dalo by se nastavit i jinak. */
+    /** Tímto se to bude chovat jako SQL, vrátí jeden záznam pro jednu GROUP BY hodnotu, ale dalo by se nastavit i jinak. */
     public const DEFAULT_GROUP_LIMIT = 1;
 
-    /** @var string visruální parametr s daty bucketu z odpovědi z Elasticsearch */
+    /** Virtuální parametr s daty bucketu z odpovědi z Elasticsearch. */
     public const PARAM_BUCKET = '__bucket';
 
 
@@ -86,7 +96,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Vrací klient připojení do elasticsearch.
-     * @return Client
      */
     public function getClient(): Client
     {
@@ -96,7 +105,8 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Vložení nových informací do elasticsearch.
-     * @return bool
+     * @throws DBException
+     * @throws Throwable
      */
     public function insertOrUpdate(string $tableName, array $data): bool
     {
@@ -110,11 +120,18 @@ class ElasticsearchClient extends DBWithBooleanParsing
             $params['id'] = $data['id'];
         }
 
-        $response = $this->responseToArray($this->client->index($params));
+        try
+        {
+            $response = $this->responseToArray($this->client->index($params));
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
+        }
 
         if ($response['result'] !== 'created' && $response['result'] !== 'updated')
         {
-            Debugger::log($response, Debugger::ERROR);
+            $this->logError('Elasticsearch nevrátil po zápisu záznamu očekávaný výsledek.', ['response' => $response]);
 
             return false;
         }
@@ -125,7 +142,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Hromadné vložení informací do elasticsearch.
-     * @return bool
      * @throws DBException
      */
     public function bulkInsertOrUpdate(string $tableName, array $data, bool $waitForDataRefresh = false): bool
@@ -161,13 +177,20 @@ class ElasticsearchClient extends DBWithBooleanParsing
             $params['refresh'] = 'wait_for';
         }
 
-        $responses = $this->responseToArray($this->client->bulk($params));
+        try
+        {
+            $responses = $this->responseToArray($this->client->bulk($params));
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
+        }
 
         if ($responses['errors'] !== false)
         {
             if (!empty($responses['items']))
             {
-                Debugger::log($responses['items'], Debugger::ERROR);
+                $this->logError('Chyby při hromadném zápisu do Elasticsearch.', ['items' => $responses['items']]);
             }
 
             throw new DBException(self::ERROR_BULK_INSERT_ERROR);
@@ -245,7 +268,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
         {
             if ($this->getElasticErrorType($e) === 'document_missing_exception')
             {
-                throw new DBException(str_replace('{$id}', (string) $id, self::ERROR_UPDATE));
+                throw DBException::recordNotUpdated($id);
             }
 
             $this->handleException($e);
@@ -286,7 +309,7 @@ class ElasticsearchClient extends DBWithBooleanParsing
             // (neexistující index má naopak error type index_not_found_exception).
             if ($e->getCode() === 404 && $this->getElasticErrorType($e) !== 'index_not_found_exception')
             {
-                throw new DBException(str_replace('{$id}', (string) $id, self::ERROR_DELETE));
+                throw DBException::recordNotDeleted($id);
             }
 
             $this->handleException($e);
@@ -303,8 +326,9 @@ class ElasticsearchClient extends DBWithBooleanParsing
     /**
      * Smazání všech záznamů z elasticsearch.
      * @throws DBException
+     * @throws Throwable
      */
-    public function deleteAll(string $tableName): true
+    public function deleteAll(string $tableName): void
     {
         $params = [
             'index' => $tableName,
@@ -318,9 +342,14 @@ class ElasticsearchClient extends DBWithBooleanParsing
             ],
         ];
 
-        $this->client->deleteByQuery($params);
-
-        return true;
+        try
+        {
+            $this->client->deleteByQuery($params);
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
+        }
     }
 
 
@@ -345,7 +374,11 @@ class ElasticsearchClient extends DBWithBooleanParsing
                 return false;
             }
 
-            throw $e;
+            $this->handleException($e);
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
         }
     }
 
@@ -375,18 +408,31 @@ class ElasticsearchClient extends DBWithBooleanParsing
     /**
      * Vytvoří index podle zadané definice (settings + mappings).
      * @param array<string, mixed> $definition tělo požadavku pro vytvoření indexu
+     * @throws DBException
+     * @throws Throwable
      */
     public function createIndex(string $tableName, array $definition): void
     {
-        $this->client->indices()->create([
-            'index' => $tableName,
-            'body' => $definition,
-        ]);
+        try
+        {
+            $this->client->indices()->create([
+                'index' => $tableName,
+                'body' => $definition,
+            ]);
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
+        }
     }
 
 
     /**
+     * Vrátí záznamy odpovídající daným kritériím, nebo jejich počet (s parametrem `count`).
+     *
      * @param array<mixed>|null $resultData Surová odpověď z Elasticsearch (předává se referencí).
+     *      Zastaralé, použijte search(), která vrací SearchResult i se surovou odpovědí.
+     *      (Značka `@deprecated` tu být nemůže, vztáhla by se na celou metodu.)
      * @throws DBException
      * @throws Throwable
      */
@@ -397,306 +443,95 @@ class ElasticsearchClient extends DBWithBooleanParsing
         ?array &$resultData = null
     ): array|int
     {
-        $params = $this->checkAndRepairParams($params);
+        $findByParams = FindByParams::fromArray($this->checkAndRepairParams($params));
 
-        $paramsES = [
-            'index' => $tableName,
-            'body' => [],
-        ];
-
-        if (is_array($params[self::PARAM_FIELDS] ?? null) && !empty($params[self::PARAM_FIELDS]))
+        // Počet záznamů bez GROUP BY umí Elasticsearch vrátit rovnou přes `_count`.
+        if ($findByParams->count && $findByParams->groupBy === null)
         {
-            $paramsES['_source_includes'] = implode(',', $params[self::PARAM_FIELDS]);
+            return $this->executeCount($tableName, $findByParams, $modifyParamsCallback);
         }
 
-        if (is_array($params[self::PARAM_WHERE] ?? null) && !empty($params[self::PARAM_WHERE]))
-        {
-            $conditions = [];
+        $resultData = $response = $this->executeSearch($tableName, $findByParams, $modifyParamsCallback);
 
-            foreach ($params[self::PARAM_WHERE] as $condition => $values)
-            {
-                $values = $this->convertToDBDataTypes($values);
+        return $this->getResultMapper()->map($response, $findByParams, $this->convertFromDBDataTypes(...));
+    }
 
-                $parsedBooleanQuery = $this->parseBooleanQuery($this->putValuesIntoQuery($condition, $values));
 
-                if (count($params[self::PARAM_WHERE]) === 1)
-                {
-                    $conditions = $parsedBooleanQuery;
+    /**
+     * Vyhledá záznamy a vrátí je i se surovou odpovědí z Elasticsearch.
+     *
+     * Na rozdíl od findBy() vrací vždy záznamy - parametr `count` se ignoruje,
+     * od zjišťování počtu je metoda count().
+     * @param array<string, mixed> $params
+     * @throws DBException
+     * @throws Throwable
+     */
+    public function search(string $tableName, array $params, ?callable $modifyParamsCallback = null): SearchResult
+    {
+        unset($params[self::PARAM_COUNT]);
 
-                    break;
-                }
+        $findByParams = FindByParams::fromArray($this->checkAndRepairParams($params));
+        $response = $this->executeSearch($tableName, $findByParams, $modifyParamsCallback);
+        $rows = $this->getResultMapper()->map($response, $findByParams, $this->convertFromDBDataTypes(...));
 
-                $conditions['bool']['filter'][] = $parsedBooleanQuery;
-            }
+        return new SearchResult(
+            is_array($rows) ? $rows : [],
+            self::totalHits($response),
+            $response,
+            self::totalRelation($response),
+        );
+    }
 
-            $paramsES['body']['query'] = $conditions;
-        }
 
-        if (!empty($params[self::PARAM_LIMIT]))
-        {
-            /** @noinspection NotOptimalIfConditionsInspection */
-            if (empty($params[self::PARAM_GROUP_BY]))
-            {
-                $paramsES['body']['size'] = $params[self::PARAM_LIMIT];
+    /**
+     * Vrátí počet záznamů odpovídajících daným kritériím.
+     * @param array<string, mixed> $params
+     * @throws DBException
+     * @throws Throwable
+     */
+    public function count(string $tableName, array $params = [], ?callable $modifyParamsCallback = null): int
+    {
+        $params[self::PARAM_COUNT] = true;
 
-                if (!empty($params[self::PARAM_OFFSET]))
-                {
-                    $paramsES['body']['from'] = $params[self::PARAM_OFFSET];
-                }
-            }
-            else
-            {
-                $limit = $params[self::PARAM_LIMIT];
+        $result = $this->findBy($tableName, $params, $modifyParamsCallback);
 
-                if (!empty($params[self::PARAM_OFFSET]))
-                {
-                    $limit += $params[self::PARAM_OFFSET];
-                }
+        return is_int($result) ? $result : count($result);
+    }
 
-                $paramsES['body']['aggs']['group_by']['terms']['size'] = $limit;
-            }
-        }
-        elseif (!empty($params[self::PARAM_GROUP_BY]))
-        {
-            // Aggregation - nechceme normální výsledky
-            $paramsES['body']['size'] = 0;
-            $paramsES['body']['aggs']['group_by']['terms']['size'] = self::DEFAULT_LIMIT;
-        }
-        elseif (empty($params[self::PARAM_COUNT]))
-        {
-            // Default limit
-            $paramsES['body']['size'] = self::DEFAULT_LIMIT;
-        }
 
-        if (
-            !empty($params[self::PARAM_ORDER_BY])
-            && is_array($params[self::PARAM_ORDER_BY] ?? null)
-            && empty($params[self::PARAM_GROUP_BY])
-            && empty($params[self::PARAM_AGGREGATION])
-        )
-        {
-            foreach ($params[self::PARAM_ORDER_BY] as $column)
-            {
-                $desc = strpos($column, ' desc');
+    /**
+     * Chráněné, aby šlo odesílání dotazu obejít (testy, dekorátory nad klientem).
+     * @throws DBException
+     * @throws Throwable
+     */
+    protected function executeCount(
+        string $tableName,
+        FindByParams $params,
+        ?callable $modifyParamsCallback,
+    ): int
+    {
+        $request = $this->getRequestBuilder()->buildCountRequest($tableName, $params, $this->createWhereCompiler());
 
-                if ($desc !== false)
-                {
-                    $column = substr($column, 0, $desc);
-                }
+        return $this->sendCount($this->modifyRequest($request, $modifyParamsCallback));
+    }
 
-                $paramsES['body']['sort'][] = [$column => ($desc !== false ? 'desc' : 'asc')];
-            }
 
-            $paramsES['body']['sort'][] = '_score';
-        }
-
-        if (!empty($params[self::PARAM_GROUP_BY]))
-        {
-            // Je možné v groupBy uvést "script" a definovat skript v groupByScript
-            if ($params[self::PARAM_GROUP_BY] !== 'script' || empty($params[self::PARAM_GROUP_BY_SCRIPT]))
-            {
-                $paramsES['body']['aggs']['group_by']['terms']['field'] = $params[self::PARAM_GROUP_BY];
-            }
-            else
-            {
-                $paramsES['body']['aggs']['group_by']['terms']['script'] = $params[self::PARAM_GROUP_BY_SCRIPT];
-            }
-            if (is_array($params[self::PARAM_ORDER_BY] ?? null) && !empty($params[self::PARAM_ORDER_BY]))
-            {
-                $paramsES['body']['aggs']['group_by']['aggs']['results']['top_hits']['size'] = 1;
-
-                if (!empty($params[self::PARAM_FIELDS]))
-                {
-                    // Chceme vrátit jen požadovaná pole
-                    $paramsES['body']['aggs']['group_by']['aggs']['results']['top_hits']['_source']['includes'] = $params[self::PARAM_FIELDS];
-                }
-
-                foreach ($params[self::PARAM_ORDER_BY] as $column)
-                {
-                    $desc = strpos($column, ' desc');
-
-                    if ($desc !== false)
-                    {
-                        $column = substr($column, 0, $desc);
-                    }
-
-                    $paramsES['body']['aggs']['group_by']['terms']['order'][] = [($column === $params[self::PARAM_GROUP_BY] ? '_key' : ($column === self::PARAM_COUNT ? '_count' : $column)) => ($desc !== false ? 'desc' : 'asc')];
-
-                    // Musí se přidat agregace podle sloupce, podle kterého chceme řadit
-                    if ($column !== $params[self::PARAM_GROUP_BY] && $column !== self::PARAM_COUNT)
-                    {
-                        $paramsES['body']['aggs']['group_by']['aggs'][$column][$desc !== false ? 'max' : 'min']['field'] = $column;
-                    }
-                }
-
-                // Vnitřní řazení v GROUP BY buckets (jaký záznam ze skupiny chceme)
-                if (
-                    is_array($params[self::PARAM_GROUP_INTERNAL_ORDER_BY] ?? null)
-                    && !empty($params[self::PARAM_GROUP_INTERNAL_ORDER_BY])
-                )
-                {
-                    foreach ($params[self::PARAM_GROUP_INTERNAL_ORDER_BY] as $column)
-                    {
-                        $desc = strpos($column, ' desc');
-
-                        if ($desc !== false)
-                        {
-                            $column = substr($column, 0, $desc);
-                        }
-
-                        $paramsES['body']['aggs']['group_by']['aggs']['results']['top_hits']['sort'][] = [$column => ['order' => $desc !== false ? 'desc' : 'asc']];
-                    }
-                }
-            }
-        }
-
-        if (is_array($params[self::PARAM_AGGREGATION] ?? null) && !empty($params[self::PARAM_AGGREGATION]))
-        {
-            foreach ($params[self::PARAM_AGGREGATION] as $agg => $columns)
-            {
-                if (!is_array($columns))
-                {
-                    $columns = [$columns];
-                }
-
-                if (empty($params[self::PARAM_GROUP_BY]))
-                {
-                    foreach ($columns as $column)
-                    {
-                        $paramsES['body']['aggs']["{$agg}_{$column}"][$agg] = ['field' => $column];
-                    }
-                }
-                else
-                {
-                    foreach ($columns as $column)
-                    {
-                        $paramsES['body']['aggs']['group_by']['aggs']["{$agg}_{$column}"][$agg] = ['field' => $column];
-                    }
-                }
-            }
-        }
-
-        if (!empty($params[self::PARAM_COUNT]) && empty($params[self::PARAM_GROUP_BY]))
-        {
-            try
-            {
-                unset($paramsES['body']['size']);
-
-                $results = $this->responseToArray($this->client->count(
-                    $modifyParamsCallback !== null ? $modifyParamsCallback($paramsES) : $paramsES,
-                ));
-
-                return $results[self::PARAM_COUNT];
-            }
-            catch(Throwable $e)
-            {
-                $this->handleException($e);
-            }
-        }
-
+    /**
+     * Odešle hotový dotaz na endpoint `_count`.
+     *
+     * Odesílání je oddělené od sestavení dotazu schválně: testy a dekorátory tak můžou
+     * podstrčit odpověď, aniž by přeskočily sestavení dotazu, které je potřeba otestovat.
+     * @param array<string, mixed> $request
+     * @throws DBException
+     * @throws Throwable
+     */
+    protected function sendCount(array $request): int
+    {
         try
         {
-            $resultData = $results = $this->responseToArray($this->client->search(
-                $modifyParamsCallback !== null ? $modifyParamsCallback($paramsES) : $paramsES,
-            ));
+            $response = $this->responseToArray($this->client->count($request));
 
-            $finalResults = [];
-
-            if (!empty($params[self::PARAM_GROUP_BY]))
-            {
-                $buckets = $results['aggregations']['group_by']['buckets'];
-
-                // Pokud zjišťujeme pouze počet záznamů, zajímá nás počet buckets
-                if (!empty($params[self::PARAM_COUNT]))
-                {
-                    return count($buckets);
-                }
-
-                foreach ($buckets as $bucket)
-                {
-                    if (!empty($bucket['results']))
-                    {
-                        // @phpstan-ignore-next-line
-                        if (self::DEFAULT_GROUP_LIMIT !== 1)
-                        {
-                            throw new NotImplementedException(
-                                'Vracení jiného počtu výsledků než 1 pro skupinu (v GROUP BY) je třeba doimplementovat.',
-                            );
-                        }
-
-                        // Výsledky s top_hits
-                        $result = $bucket['results']['hits']['hits'][0]['_source'];
-                    }
-                    else
-                    {
-                        $result = [$params[self::PARAM_GROUP_BY] => $bucket['key'], 'count' => $bucket['doc_count']];
-                    }
-
-                    /** @noinspection NotOptimalIfConditionsInspection */
-                    if (is_array($params[self::PARAM_AGGREGATION] ?? null) && !empty($params[self::PARAM_AGGREGATION]))
-                    {
-                        foreach ($params[self::PARAM_AGGREGATION] as $agg => $columns)
-                        {
-                            if (!is_array($columns))
-                            {
-                                $columns = [$columns];
-                            }
-                            foreach ($columns as $column)
-                            {
-                                $result["{$agg}_{$column}"] = $bucket["{$agg}_{$column}"]['value'];
-                            }
-                        }
-                    }
-
-                    $result[self::PARAM_BUCKET] = $bucket;
-
-                    $finalResults[] = $this->convertFromDBDataTypes($result);
-                }
-
-                if (!empty($params[self::PARAM_OFFSET]) && is_numeric($params[self::PARAM_OFFSET]))
-                {
-                    $finalResults = array_slice($finalResults, (int) $params[self::PARAM_OFFSET]);
-                }
-            }
-            elseif (is_array($params[self::PARAM_AGGREGATION] ?? null) && !empty($params[self::PARAM_AGGREGATION]))
-            {
-                $result = [];
-
-                foreach ($params[self::PARAM_AGGREGATION] as $agg => $columns)
-                {
-                    if (!is_array($columns))
-                    {
-                        $columns = [$columns];
-                    }
-                    foreach ($columns as $column)
-                    {
-                        $result["{$agg}_{$column}"] = $results['aggregations']["{$agg}_{$column}"]['value'];
-                    }
-                }
-
-                $finalResults[] = $this->convertFromDBDataTypes($result);
-            }
-            else
-            {
-                foreach ($results['hits']['hits'] as $result)
-                {
-                    $row = $result['_source'];
-
-                    if (
-                        is_array($params[self::PARAM_FIELDS] ?? null)
-                        && !empty($params[self::PARAM_FIELDS])
-                        && in_array('id', $params[self::PARAM_FIELDS])
-                    )
-                    {
-                        /** @noinspection SlowArrayOperationsInLoopInspection */
-                        $row = array_merge(['id' => $result['_id']], $row);
-                    }
-
-                    $finalResults[] = $this->convertFromDBDataTypes($row);
-                }
-            }
-
-            return $finalResults;
+            return (int) $response[self::PARAM_COUNT];
         }
         catch(Throwable $e)
         {
@@ -705,18 +540,139 @@ class ElasticsearchClient extends DBWithBooleanParsing
     }
 
 
+    /**
+     * Odešle dotaz do Elasticsearch a vrátí surovou odpověď.
+     * @return mixed[]
+     * @throws DBException
+     * @throws Throwable
+     */
+    protected function executeSearch(
+        string $tableName,
+        FindByParams $params,
+        ?callable $modifyParamsCallback,
+    ): array
+    {
+        $request = $this->getRequestBuilder()->build($tableName, $params, $this->createWhereCompiler());
+
+        return $this->sendSearch($this->modifyRequest($request, $modifyParamsCallback));
+    }
+
+
+    /**
+     * Odešle hotový dotaz do Elasticsearch a vrátí surovou odpověď.
+     *
+     * Odesílání je oddělené od sestavení dotazu schválně: testy a dekorátory tak můžou
+     * podstrčit odpověď, aniž by přeskočily sestavení dotazu, které je potřeba otestovat.
+     * @param array<string, mixed> $request
+     * @return mixed[]
+     * @throws DBException
+     * @throws Throwable
+     */
+    protected function sendSearch(array $request): array
+    {
+        try
+        {
+            return $this->responseToArray($this->client->search($request));
+        }
+        catch(Throwable $e)
+        {
+            $this->handleException($e);
+        }
+    }
+
+
+    /**
+     * Celkový počet odpovídajících záznamů z odpovědi, pokud ho Elasticsearch uvedl.
+     * @phpstan-ignore missingType.iterableValue
+     */
+    private static function totalHits(array $response): ?int
+    {
+        $total = $response['hits']['total']['value'] ?? null;
+
+        return is_int($total) ? $total : null;
+    }
+
+
+    /**
+     * Je počet z odpovědi přesný (`eq`), nebo jen dolní mez (`gte`)?
+     *
+     * Elasticsearch ve výchozím nastavení počítá shody jen do 10 000 a dál hlásí `gte`.
+     * Přesný počet vrací count() přes endpoint `_count`.
+     * @phpstan-ignore missingType.iterableValue
+     */
+    private static function totalRelation(array $response): ?string
+    {
+        $relation = $response['hits']['total']['relation'] ?? null;
+
+        return is_string($relation) ? $relation : null;
+    }
+
+
+    /**
+     * @return Closure(string, mixed[]|null): array<string, mixed>
+     */
+    private function createWhereCompiler(): Closure
+    {
+        return fn (string $condition, ?array $values): array => $this->compileWhereCondition($condition, $values);
+    }
+
+
+    /**
+     * Přeloží jednu where podmínku na Elasticsearch query.
+     * Konverze hodnot jde přes convertToDBDataTypes(), aby ji šlo v potomcích přepsat.
+     * @param mixed[]|null $values
+     * @return array<string, mixed>
+     * @throws DBException
+     */
+    protected function compileWhereCondition(string $condition, ?array $values): array
+    {
+        return $this->parseWhereCondition(
+            $condition,
+            $values !== null ? $this->convertToDBDataTypes($values) : null,
+        );
+    }
+
+
+    /**
+     * Dá volajícímu možnost sáhnout si na hotový dotaz před odesláním.
+     * @param array<string, mixed> $request
+     * @return array<string, mixed>
+     */
+    private function modifyRequest(array $request, ?callable $modifyParamsCallback): array
+    {
+        return $modifyParamsCallback !== null ? $modifyParamsCallback($request) : $request;
+    }
+
+
+    private function getRequestBuilder(): SearchRequestBuilder
+    {
+        return $this->requestBuilder ??= new SearchRequestBuilder(self::DEFAULT_LIMIT);
+    }
+
+
+    private function getResultMapper(): SearchResultMapper
+    {
+        return $this->resultMapper ??= new SearchResultMapper(self::PARAM_BUCKET, self::DEFAULT_GROUP_LIMIT);
+    }
+
+
+    private function getDataTypeConverter(): DataTypeConverter
+    {
+        return $this->dataTypeConverter ??= new DataTypeConverter();
+    }
+
+
+    /**
+     * Do vnořených polí se zanořuje přes `$this`, aby se přepsání metody v potomkovi
+     * uplatnilo na celý dokument, ne jen na jeho první úroveň.
+     */
     public function convertToDBDataTypes(array $data): array
     {
         foreach ($data as $key => $value)
         {
-            if ($value instanceof DateTime)
-            {
-                $data[$key] = $value->format('c');
-            }
-            elseif (is_array($value))
-            {
-                $data[$key] = $this->convertToDBDataTypes($value);
-            }
+            $data[$key] = is_array($value)
+                ? $this->convertToDBDataTypes($value)
+                : $this->getDataTypeConverter()->valueToDatabase($value);
         }
 
         return $data;
@@ -724,28 +680,17 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
 
     /**
+     * Do vnořených polí se zanořuje přes `$this`, aby se přepsání metody v potomkovi
+     * uplatnilo na celý dokument, ne jen na jeho první úroveň.
      * @throws Throwable
      */
     public function convertFromDBDataTypes(array $data): array
     {
         foreach ($data as $key => $value)
         {
-            if (is_array($value))
-            {
-                $data[$key] = $this->convertFromDBDataTypes($value);
-            }
-            // Konverze na DateTime
-            elseif (
-                is_string($value)
-                && ((
-                        strlen($value) === 10
-                        && preg_match('/[1-2][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]/', $value) === 1
-                    )
-                    || preg_match('/[1-2][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]/', $value) === 1
-                ))
-            {
-                $data[$key] = new DateTime($value);
-            }
+            $data[$key] = is_array($value)
+                ? $this->convertFromDBDataTypes($value)
+                : $this->getDataTypeConverter()->valueFromDatabase($value);
         }
 
         return $data;
@@ -770,40 +715,184 @@ class ElasticsearchClient extends DBWithBooleanParsing
     }
 
 
-    protected function parseAndOrQuery(string $query): array
+    /**
+     * Operátory výrazů v pořadí, ve kterém se hledají. POŘADÍ JE VÝZNAMNÉ:
+     *  - delší operátory musí být před svými předponami (`<=` před `<`),
+     *  - `IN` je až úplně poslední, protože hodnoty LIKE a CROSS FIELDS jsou volný
+     *    text a mohou samy obsahovat ` IN `; podmínka IN naopak žádný z operátorů
+     *    nad sebou obsahovat nemůže.
+     * @var list<array{string, string}> operátor -> metoda, která ho přeloží
+     */
+    private const EXPRESSION_OPERATORS = [
+        ['<=', 'parseRangeExpression'],
+        ['>=', 'parseRangeExpression'],
+        ['!=', 'parseNotEqualExpression'],
+        ['<', 'parseRangeExpression'],
+        ['>', 'parseRangeExpression'],
+        ['=', 'parseEqualExpression'],
+        [' NOT LIKE ', 'parseNotLikeExpression'],
+        [' LIKE ', 'parseLikeOperator'],
+        [' IS NULL', 'parseIsNullExpression'],
+        [' IS NOT NULL', 'parseIsNotNullExpression'],
+        [' CROSS FIELDS ', 'parseCrossFieldsExpression'],
+        [' NOT IN ', 'parseNotInExpression'],
+        [' IN ', 'parseInExpression'],
+    ];
+
+
+    /** Elasticsearch klauzule pro jednotlivé porovnávací operátory. */
+    private const RANGE_CLAUSES = [
+        '<=' => 'lte',
+        '>=' => 'gte',
+        '<' => 'lt',
+        '>' => 'gt',
+    ];
+
+
+    /**
+     * @return array<string, mixed>
+     * @throws DBException
+     */
+    protected function parseExpression(string $expr): array
     {
-        $ands = explode(' OR ', $query);
-
-        $result = [];
-
-        foreach ($ands as $and)
+        foreach (self::EXPRESSION_OPERATORS as [$operator, $method])
         {
-            $exprs = explode(' AND ', $and);
+            $pos = mb_strpos($expr, $operator);
 
-            if (count($exprs) === 1 && count($ands) === 1)
+            if ($pos !== false)
             {
-                $result = $this->parseExpression($exprs[0]);
-
-                break;
-            }
-
-            $partialResult = [];
-
-            foreach ($exprs as $expr)
-            {
-                $partialResult[] = $this->parseExpression($expr);
-            }
-
-            /** @noinspection NotOptimalIfConditionsInspection */
-            if (count($ands) === 1)
-            {
-                $result['bool']['filter'] = $partialResult;
-            }
-            else
-            {
-                $result['bool']['should'][]['bool']['filter'] = $partialResult;
+                return $this->{$method}($expr, $pos, $operator);
             }
         }
+
+        throw new DBException('No expression matched.');
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseRangeExpression(string $expr, int $pos, string $operator): array
+    {
+        $result = [];
+        $result['bool']['filter'][]['range'][self::fieldBefore($expr, $pos)][self::RANGE_CLAUSES[$operator]]
+            = $this->resolveValue(self::valueAfter($expr, $pos, $operator));
+
+        return $result;
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseNotEqualExpression(string $expr, int $pos, string $operator): array
+    {
+        $result = [];
+        $result['bool']['must_not']['match'][self::fieldBefore($expr, $pos)]
+            = $this->resolveValue(self::valueAfter($expr, $pos, $operator));
+
+        return $result;
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseEqualExpression(string $expr, int $pos, string $operator): array
+    {
+        $value = self::valueAfter($expr, $pos, $operator);
+        $field = self::fieldBefore($expr, $pos);
+        $result = [];
+
+        // Hodnotou může být i seznam - zapsaný jako [self::PARAM_WHERE]['sloupec = ?'] = [[1, 2, 3]].
+        // Vnější pole jsou hodnoty pro jednotlivé `?`, vnitřní je ten seznam.
+        if (($listValue = $this->resolveListValue($value)) !== null)
+        {
+            $result['terms'][$field] = $listValue;
+        }
+        else
+        {
+            $result['match'][$field] = $this->resolveValue($value);
+        }
+
+        return $result;
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseNotLikeExpression(string $expr, int $pos, string $operator): array
+    {
+        return $this->parseLikeExpression(
+            field: self::fieldBefore($expr, $pos),
+            value: self::valueAfter($expr, $pos, $operator),
+            negated: true,
+        );
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseLikeOperator(string $expr, int $pos, string $operator): array
+    {
+        return $this->parseLikeExpression(
+            field: self::fieldBefore($expr, $pos),
+            value: self::valueAfter($expr, $pos, $operator),
+        );
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseIsNullExpression(string $expr, int $pos, string $operator): array
+    {
+        $result = [];
+        $result['bool']['must_not']['exists']['field'] = self::fieldBefore($expr, $pos);
+
+        return $result;
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseIsNotNullExpression(string $expr, int $pos, string $operator): array
+    {
+        $result = [];
+        $result['exists']['field'] = self::fieldBefore($expr, $pos);
+
+        return $result;
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function parseCrossFieldsExpression(string $expr, int $pos, string $operator): array
+    {
+        return [
+            'multi_match' => [
+                'query' => $this->resolveText(self::valueAfter($expr, $pos, $operator)),
+                'type' => 'cross_fields',
+                'operator' => 'and',
+                'fields' => explode(',', self::fieldBefore($expr, $pos)),
+            ],
+        ];
+    }
+
+
+    /**
+     * @return array<string, mixed>
+     * @throws DBException
+     */
+    private function parseNotInExpression(string $expr, int $pos, string $operator): array
+    {
+        $result = [];
+        $result['bool']['must_not']['terms'][self::fieldBefore($expr, $pos)]
+            = $this->resolveRequiredListValue(self::valueAfter($expr, $pos, $operator));
 
         return $result;
     }
@@ -813,121 +902,302 @@ class ElasticsearchClient extends DBWithBooleanParsing
      * @return array<string, mixed>
      * @throws DBException
      */
-    protected function parseExpression(string $expr): array
+    private function parseInExpression(string $expr, int $pos, string $operator): array
     {
-        if (($pos = strpos($expr, '<=')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 2));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['lte'] = $this->normalizeValue($val);
+        $result = [];
+        $result['terms'][self::fieldBefore($expr, $pos)]
+            = $this->resolveRequiredListValue(self::valueAfter($expr, $pos, $operator));
 
-            return $result;
+        return $result;
+    }
+
+
+    /**
+     * Název sloupce, tedy část výrazu před operátorem.
+     */
+    private static function fieldBefore(string $expr, int $pos): string
+    {
+        return trim(mb_substr($expr, 0, $pos));
+    }
+
+
+    /**
+     * Hodnota, tedy část výrazu za operátorem.
+     */
+    private static function valueAfter(string $expr, int $pos, string $operator): string
+    {
+        return trim(mb_substr($expr, $pos + mb_strlen($operator)));
+    }
+
+
+    /**
+     * Rozparsuje where podmínku s hodnotami na Elasticsearch query.
+     * Hodnoty se do textu podmínky nevkládají, jen se na ně odkazuje značkou (viz resolveValue).
+     * @param mixed[]|null $values
+     * @return array<string, mixed>
+     * @throws DBException
+     */
+    protected function parseWhereCondition(string $condition, ?array $values): array
+    {
+        $this->boundValues = [];
+
+        return $this->parseBooleanQuery($this->putValuesIntoQuery($condition, $values, $this->boundValues));
+    }
+
+
+    /**
+     * Vrátí hodnotu, na kterou se text odkazuje.
+     *
+     * Značka `#n#` se nahradí předanou hodnotou včetně jejího typu. Text napsaný přímo
+     * v podmínce (např. `age > 18`) žádný typ nemá, ten se odhaduje podle zápisu.
+     * @throws DBException
+     */
+    private function resolveValue(string $text): mixed
+    {
+        // Samotná značka je celá hodnota, takže si může nechat svůj typ.
+        if ($this->isBoundValue($text))
+        {
+            return $this->boundValues[$text];
         }
 
-        if (($pos = strpos($expr, '>=')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 2));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['gte'] = $this->normalizeValue($val);
+        // Značka uprostřed textu (`name = ?%`) je jen jeho část, tam typ zachovat nejde.
+        return $this->normalizeValue($this->resolveText($text));
+    }
 
-            return $result;
+
+    /**
+     * Textová podoba hodnoty, na kterou se text odkazuje.
+     * Značky se nahradí hodnotami, zbytek textu zůstane, jak ho napsal vývojář.
+     * @throws DBException
+     */
+    private function resolveText(string $text): string
+    {
+        if ($this->boundValues === [])
+        {
+            return $text;
         }
 
-        if (($pos = strpos($expr, '!=')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 2));
-            $result['bool']['must_not']['match'][trim(substr($expr, 0, $pos))] = $this->normalizeValue($val);
+        return (string) preg_replace_callback(
+            '/#\d+#/',
+            fn (array $matches): string => array_key_exists($matches[0], $this->boundValues)
+                ? $this->boundValueToString($matches[0])
+                : $matches[0],
+            $text,
+        );
+    }
 
-            return $result;
+
+    /**
+     * Hodnota jako text. Ne každou hodnotu jde na text převést - pole ani objekt
+     * by se převedl na `Array`, resp. by spadl na fatální chybě.
+     * @throws DBException
+     */
+    private function boundValueToString(string $token): string
+    {
+        $value = $this->boundValues[$token];
+
+        if ($value instanceof DateTimeInterface)
+        {
+            return $value->format('c');
         }
 
-        if (($pos = strpos($expr, '<')) !== false)
+        if (!is_scalar($value) && !$value instanceof Stringable)
         {
-            $val = trim(substr($expr, $pos + 1));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['lt'] = $this->normalizeValue($val);
-
-            return $result;
-        }
-
-        if (($pos = strpos($expr, '>')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 1));
-            $result['bool']['filter'][]['range'][trim(substr($expr, 0, $pos))]['gt'] = $this->normalizeValue($val);
-
-            return $result;
-        }
-
-        if (($pos = strpos($expr, '=')) !== false)
-        {
-            $val = trim(substr($expr, $pos + 1));
-
-            // Je možné zde dát pole, zadané takto [self::PARAM_WHERE]['sloupec = ?'] = [1, 2, 3];
-            if (($start = strpos($val, '[')) !== false && ($end = strpos($val, ']')) !== false && $start < $end)
-            {
-                $val = explode(',', substr($val, $start + 1, $end - 1));
-
-                foreach ($val as $key => $item)
-                {
-                    if ((int) $item == $item)
-                    {
-                        $val[$key] = (int) $item;
-                    }
-                }
-
-                $result['terms'][trim(substr($expr, 0, $pos))] = $val;
-            }
-            else
-            {
-                $result['match'][trim(substr($expr, 0, $pos))] = $this->normalizeValue($val);
-            }
-
-            return $result;
-        }
-
-        if (($pos = strpos($expr, ' LIKE ')) !== false)
-        {
-            $val = trim(mb_substr($expr, $pos + 6));
-
-            if ($this->wildcardValueFilter !== null)
-            {
-                $val = call_user_func($this->wildcardValueFilter, $val);
-            }
-
-            $result['wildcard'][trim(mb_substr($expr, 0, $pos))] = mb_strtolower(
-                (string) mb_ereg_replace('%', '*', $val),
+            throw new DBException(
+                'Hodnotu filtru typu ' . get_debug_type($value) . ' nelze v této podmínce použít jako text.',
             );
-
-            return $result;
         }
 
-        if (($pos = strpos($expr, ' IS NULL')) !== false)
+        return (string) $value;
+    }
+
+
+    /**
+     * Vrátí seznam hodnot, na který se text odkazuje, nebo null, pokud to seznam není.
+     * @return list<mixed>|null
+     */
+    private function resolveListValue(string $text): ?array
+    {
+        if ($this->isBoundValue($text))
         {
-            $result['bool']['must_not']['exists']['field'] = trim(mb_substr($expr, 0, $pos));
+            $value = $this->boundValues[$text];
 
-            return $result;
+            return is_array($value) ? array_values($value) : null;
         }
 
-        if (($pos = strpos($expr, ' IS NOT NULL')) !== false)
+        return $this->parseInlineList($text);
+    }
+
+
+    /**
+     * @return list<mixed>
+     * @throws DBException
+     */
+    private function resolveRequiredListValue(string $text): array
+    {
+        $list = $this->resolveListValue($text);
+
+        if ($list === null)
         {
-            $result['exists']['field'] = trim(mb_substr($expr, 0, $pos));
-
-            return $result;
+            throw new DBException(
+                'Hodnota podmínky IN musí být seznam hodnot, zadáno: `' . $this->describeValue($text) . '`.',
+            );
         }
 
-        if (($pos = strpos($expr, ' CROSS FIELDS ')) !== false)
+        return $list;
+    }
+
+
+    private function isBoundValue(string $text): bool
+    {
+        return self::isValueToken($text) && array_key_exists($text, $this->boundValues);
+    }
+
+
+    /**
+     * Popis hodnoty pro chybovou hlášku - u značky nemá smysl vypisovat ji samotnou.
+     */
+    private function describeValue(string $text): string
+    {
+        if (!$this->isBoundValue($text))
         {
-            $fields = trim(mb_substr($expr, 0, $pos));
-            $val = trim(substr($expr, $pos + 14));
-
-            $result['multi_match'] = [
-                'query' => $val,
-                'type' => 'cross_fields',
-                'operator' => 'and',
-                'fields' => explode(',', $fields),
-            ];
-
-            return $result;
+            return $text;
         }
 
-        throw new DBException('No expression matched.');
+        $value = $this->boundValues[$text];
+
+        return is_scalar($value)
+            ? get_debug_type($value) . ' ' . var_export($value, true)
+            : get_debug_type($value);
+    }
+
+
+    /**
+     * Rozparsuje seznam zapsaný přímo v podmínce, tedy `[a,b,c]` nebo `[?,?]`.
+     * Vrací null, pokud text seznam není.
+     * @return list<mixed>|null
+     */
+    private function parseInlineList(string $text): ?array
+    {
+        if (($start = strpos($text, '[')) === false || ($end = strpos($text, ']')) === false || $start >= $end)
+        {
+            return null;
+        }
+
+        $items = [];
+
+        foreach (explode(',', substr($text, $start + 1, $end - $start - 1)) as $item)
+        {
+            // Položkou seznamu může být i `?`, pak si hodnota drží svůj typ.
+            if ($this->isBoundValue(trim($item)))
+            {
+                $items[] = $this->boundValues[trim($item)];
+
+                continue;
+            }
+
+            $items[] = (int) $item == $item ? (int) $item : $item;
+        }
+
+        return $items;
+    }
+
+
+    /**
+     * Rozparsuje LIKE výraz (včetně volitelné klauzule ESCAPE) na wildcard query.
+     * Escape znak se načítá z klauzule `ESCAPE 'x'`, pokud je definována.
+     * @return array<string, mixed>
+     * @throws DBException
+     */
+    private function parseLikeExpression(string $field, string $value, bool $negated = false): array
+    {
+        // Volitelná klauzule ESCAPE - z ní se načte escape znak.
+        $escapeChar = null;
+
+        if (preg_match("/\s+ESCAPE\s+'(?<char>.)'$/u", $value, $matches) === 1)
+        {
+            $escapeChar = $matches['char'];
+            $value = trim((string) preg_replace("/\s+ESCAPE\s+'.'$/u", '', $value));
+        }
+
+        // Hodnota může být SQL literál v uvozovkách (např. `col LIKE ''` nebo `col LIKE '%abc%'`).
+        if (mb_strlen($value) >= 2 && str_starts_with($value, "'") && str_ends_with($value, "'"))
+        {
+            $value = mb_substr($value, 1, mb_strlen($value) - 2);
+        }
+
+        // Značka může být i jen částí vzoru, třeba `name LIKE '%?%'`.
+        $value = $this->resolveText($value);
+
+        if ($this->wildcardValueFilter !== null)
+        {
+            $value = call_user_func($this->wildcardValueFilter, $value);
+        }
+
+        $wildcard = mb_strtolower($this->translateLikeToWildcard($value, $escapeChar));
+
+        if ($negated)
+        {
+            $result['bool']['must_not']['wildcard'][$field] = $wildcard;
+        }
+        else
+        {
+            $result['wildcard'][$field] = $wildcard;
+        }
+
+        return $result;
+    }
+
+
+    /**
+     * Převede SQL LIKE pattern na Elasticsearch wildcard pattern.
+     *
+     * Zástupným znakem je `%` (a s definovaným escape znakem i `_`), tak to má SQL LIKE.
+     * Wildcard znaky Elasticsearch (`*`, `?`, `\`) zástupné nejsou, takže se escapují -
+     * jinak by `*` z hodnoty, kterou zadal uživatel, procházel celý index.
+     * S definovaným escape znakem navíc platí, že escapovaný znak je vždy literál.
+     */
+    private function translateLikeToWildcard(string $value, ?string $escapeChar): string
+    {
+        $result = '';
+        $chars = mb_str_split($value);
+        $count = count($chars);
+
+        for ($i = 0; $i < $count; $i++)
+        {
+            $char = $chars[$i];
+
+            // Escapovaný znak je vždy literál.
+            if ($escapeChar !== null && $char === $escapeChar && $i + 1 < $count)
+            {
+                $result .= $this->escapeWildcardCharacter($chars[++$i]);
+
+                continue;
+            }
+
+            // `_` je zástupný znak jen v plné SQL LIKE sémantice, tedy s klauzulí ESCAPE.
+            if ($char === '_' && $escapeChar !== null)
+            {
+                $result .= '?';
+
+                continue;
+            }
+
+            $result .= $char === '%' ? '*' : $this->escapeWildcardCharacter($char);
+        }
+
+        return $result;
+    }
+
+
+    /**
+     * Escapuje znak, který má ve wildcard pattern Elasticsearch speciální význam.
+     */
+    private function escapeWildcardCharacter(string $char): string
+    {
+        return in_array($char, ['*', '?', '\\'], true)
+            ? '\\' . $char
+            : $char;
     }
 
 
@@ -952,7 +1222,6 @@ class ElasticsearchClient extends DBWithBooleanParsing
 
     /**
      * Odchycení společných výjimek.
-     * @param Throwable $e
      * @throws DBException
      * @throws Throwable
      */

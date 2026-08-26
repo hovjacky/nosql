@@ -13,6 +13,8 @@ composer require hovjacky/nosql
 ```
 It requires PHP 8.2 or higher and the `mbstring` extension.
 
+Changes between releases are listed in [CHANGELOG.md](CHANGELOG.md).
+
 Usage
 -----
 

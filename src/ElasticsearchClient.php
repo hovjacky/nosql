@@ -28,6 +28,15 @@ class ElasticsearchClient extends DBWithBooleanParsing
     /** @var array<string, mixed> hodnoty právě parsované where podmínky (klíč = značka `#n#`) */
     private array $boundValues = [];
 
+    /** Má klient při překladu podmínek rozlišovat typy polí podle mapování indexu? */
+    private bool $isFieldTypeDetectionEnabled = false;
+
+    /** @var array<string, array<string, string>> načtené typy polí: index => (cesta pole => typ) */
+    private array $fieldTypes = [];
+
+    /** Index, nad kterým se právě překládá where podmínka (null = neznámý). */
+    private ?string $currentTableName = null;
+
     private ?SearchRequestBuilder $requestBuilder = null;
 
     private ?SearchResultMapper $resultMapper = null;
@@ -91,6 +100,112 @@ class ElasticsearchClient extends DBWithBooleanParsing
     public function setWildcardValueFilter(callable $wildcardValueFilter): void
     {
         $this->wildcardValueFilter = $wildcardValueFilter;
+    }
+
+
+    /**
+     * Zapne rozlišování typů polí při překladu LIKE podmínek.
+     *
+     * Typy polí se načítají z mapování indexu (jeden dotaz na index za životnost instance).
+     * Podle typu se pak LIKE překládá tak, aby odpovídal SQL sémantice:
+     *  - `text`: „začíná na“ (`x%`) se ukotví na první term hodnoty a víceslovné „obsahuje“
+     *    (`%x y%`) hledá posloupnost termů - obojí přes intervals query,
+     *  - `keyword`: hodnota se neupravuje filtrem wildcard hodnoty ani nepřevádí na malá písmena,
+     *    porovnává se bez ohledu na velikost písmen (`case_insensitive`).
+     * Bez zapnutí (nebo u pole, jehož typ se nepodaří zjistit) se LIKE překládá postaru.
+     */
+    public function enableFieldTypeDetection(bool $enable = true): void
+    {
+        $this->isFieldTypeDetectionEnabled = $enable;
+    }
+
+
+    /**
+     * Vrací typ pole v indexu dle mapování (`text`, `keyword`, `long`, ...).
+     * Vrací null, pokud je rozlišování typů vypnuté nebo pole v mapování není.
+     */
+    public function getFieldType(string $tableName, string $field): ?string
+    {
+        if (!$this->isFieldTypeDetectionEnabled)
+        {
+            return null;
+        }
+
+        if (!isset($this->fieldTypes[$tableName]))
+        {
+            try
+            {
+                $this->fieldTypes[$tableName] = $this->fetchFieldTypes($tableName);
+            }
+            catch(Throwable $e)
+            {
+                // Bez mapování se podmínky přeloží postaru - nedostupné mapování nesmí shodit dotaz.
+                $this->logError('Nepodařilo se načíst mapování indexu ' . $tableName . ': ' . $e->getMessage());
+                $this->fieldTypes[$tableName] = [];
+            }
+        }
+
+        return $this->fieldTypes[$tableName][$field] ?? null;
+    }
+
+
+    /**
+     * Načte typy polí indexu z jeho mapování.
+     * Vnořené objekty i vícenásobná pole (`fields`) se převádí na cesty s tečkou.
+     * Chráněné, aby šlo načítání v testech nahradit.
+     * @return array<string, string> cesta pole => typ
+     * @throws Throwable
+     */
+    protected function fetchFieldTypes(string $tableName): array
+    {
+        $response = $this->responseToArray($this->client->indices()->getMapping(['index' => $tableName]));
+        $fieldTypes = [];
+
+        // Název indexu může být alias - odpověď pak obsahuje všechny indexy, na které ukazuje.
+        foreach ($response as $indexMapping)
+        {
+            $fieldTypes += self::flattenMappingProperties($indexMapping['mappings']['properties'] ?? []);
+        }
+
+        return $fieldTypes;
+    }
+
+
+    /**
+     * Převede vlastnosti mapování na seznam cest polí s jejich typem.
+     * @param array<array-key, mixed> $properties
+     * @return array<string, string>
+     */
+    private static function flattenMappingProperties(array $properties, string $prefix = ''): array
+    {
+        $fieldTypes = [];
+
+        foreach ($properties as $name => $definition)
+        {
+            if (!is_array($definition))
+            {
+                continue;
+            }
+
+            $path = $prefix . $name;
+
+            if (isset($definition['type']) && is_string($definition['type']))
+            {
+                $fieldTypes[$path] = $definition['type'];
+            }
+
+            if (isset($definition['properties']) && is_array($definition['properties']))
+            {
+                $fieldTypes += self::flattenMappingProperties($definition['properties'], $path . '.');
+            }
+
+            if (isset($definition['fields']) && is_array($definition['fields']))
+            {
+                $fieldTypes += self::flattenMappingProperties($definition['fields'], $path . '.');
+            }
+        }
+
+        return $fieldTypes;
     }
 
 
@@ -510,7 +625,10 @@ class ElasticsearchClient extends DBWithBooleanParsing
         ?callable $modifyParamsCallback,
     ): int
     {
-        $request = $this->getRequestBuilder()->buildCountRequest($tableName, $params, $this->createWhereCompiler());
+        $request = $this->buildForTable(
+            $tableName,
+            fn (): array => $this->getRequestBuilder()->buildCountRequest($tableName, $params, $this->createWhereCompiler()),
+        );
 
         return $this->sendCount($this->modifyRequest($request, $modifyParamsCallback));
     }
@@ -552,9 +670,32 @@ class ElasticsearchClient extends DBWithBooleanParsing
         ?callable $modifyParamsCallback,
     ): array
     {
-        $request = $this->getRequestBuilder()->build($tableName, $params, $this->createWhereCompiler());
+        $request = $this->buildForTable(
+            $tableName,
+            fn (): array => $this->getRequestBuilder()->build($tableName, $params, $this->createWhereCompiler()),
+        );
 
         return $this->sendSearch($this->modifyRequest($request, $modifyParamsCallback));
+    }
+
+
+    /**
+     * Sestaví dotaz s vědomím, nad kterým indexem se podmínky překládají (kvůli typům polí).
+     * @param Closure(): array<string, mixed> $build
+     * @return array<string, mixed>
+     */
+    private function buildForTable(string $tableName, Closure $build): array
+    {
+        $this->currentTableName = $tableName;
+
+        try
+        {
+            return $build();
+        }
+        finally
+        {
+            $this->currentTableName = null;
+        }
     }
 
 
@@ -1129,23 +1270,195 @@ class ElasticsearchClient extends DBWithBooleanParsing
         // Značka může být i jen částí vzoru, třeba `name LIKE '%?%'`.
         $value = $this->resolveText($value);
 
+        $query = $this->buildLikeQuery($field, $value, $escapeChar);
+
+        return $negated
+            ? ['bool' => ['must_not' => $query]]
+            : $query;
+    }
+
+
+    /**
+     * Sestaví dotaz pro LIKE vzor dle typu pole (viz enableFieldTypeDetection()).
+     * @return array<string, mixed>
+     */
+    private function buildLikeQuery(string $field, string $value, ?string $escapeChar): array
+    {
+        $fieldType = $this->currentTableName !== null
+            ? $this->getFieldType($this->currentTableName, $field)
+            : null;
+
+        // Analyzované textové pole: wildcard porovnává vzor s jednotlivými termy, ne s celou hodnotou.
+        if ($fieldType === 'text' && ($textQuery = $this->buildTextLikeQuery($field, $value, $escapeChar)) !== null)
+        {
+            return $textQuery;
+        }
+
+        // Neanalyzované pole: hodnota je v indexu tak, jak byla uložena, takže ji nesmíme
+        // upravovat filtrem pro textová pole. Velikost písmen ignorujeme jako SQL LIKE.
+        if (in_array($fieldType, ['keyword', 'constant_keyword', 'wildcard'], true))
+        {
+            return [
+                'wildcard' => [
+                    $field => [
+                        'value' => $this->translateLikeToWildcard($value, $escapeChar),
+                        'case_insensitive' => true,
+                    ],
+                ],
+            ];
+        }
+
         if ($this->wildcardValueFilter !== null)
         {
             $value = call_user_func($this->wildcardValueFilter, $value);
         }
 
-        $wildcard = mb_strtolower($this->translateLikeToWildcard($value, $escapeChar));
+        return ['wildcard' => [$field => mb_strtolower($this->translateLikeToWildcard($value, $escapeChar))]];
+    }
 
-        if ($negated)
+
+    /**
+     * Sestaví dotaz pro LIKE vzor nad analyzovaným textovým polem.
+     *
+     * Vrací null, pokud vzor vystačí s wildcard query nad jednotlivými termy:
+     * jednoslovné „obsahuje“ (`%abc%`) se přibližuje jako „některé slovo obsahuje“.
+     * „Začíná na“ (`abc%`) a víceslovné „obsahuje“ (`%ab cd%`) se překládají na intervals query,
+     * která hledá posloupnost termů (u „začíná na“ ukotvenou na začátek hodnoty).
+     * Ostatní vzory („končí na“, rovnost, zástupné znaky uprostřed) nad textovým polem správně
+     * přeložit nejde (index nezná délku hodnoty) - zůstávají postaru.
+     * @return array<string, mixed>|null
+     */
+    private function buildTextLikeQuery(string $field, string $value, ?string $escapeChar): ?array
+    {
+        $pattern = $this->splitLikePattern($value, $escapeChar);
+
+        if ($pattern === null || $pattern['literal'] === '' || !$pattern['trailing'])
         {
-            $result['bool']['must_not']['wildcard'][$field] = $wildcard;
-        }
-        else
-        {
-            $result['wildcard'][$field] = $wildcard;
+            return null;
         }
 
-        return $result;
+        // Obsahuje jednoslovný text - stačí wildcard nad termy.
+        if ($pattern['leading'] && preg_match('/^[\p{L}\p{N}]+$/u', trim($pattern['literal'])) === 1)
+        {
+            return null;
+        }
+
+        return self::buildIntervalsQuery($field, $pattern['literal'], anchored: !$pattern['leading']);
+    }
+
+
+    /**
+     * Rozdělí LIKE vzor na úvodní/koncový zástupný znak `%` a doslovný text mezi nimi.
+     * Vrací null, pokud vzor obsahuje zástupné znaky i jinde (uprostřed, `_`).
+     * @return array{leading: bool, trailing: bool, literal: string}|null
+     */
+    private function splitLikePattern(string $value, ?string $escapeChar): ?array
+    {
+        // Rozložíme vzor na znaky; zástupné znaky označíme null.
+        $items = [];
+        $chars = mb_str_split($value);
+        $count = count($chars);
+
+        for ($i = 0; $i < $count; $i++)
+        {
+            $char = $chars[$i];
+
+            if ($escapeChar !== null && $char === $escapeChar && $i + 1 < $count)
+            {
+                $items[] = $chars[++$i];
+            }
+            elseif ($char === '%' || ($char === '_' && $escapeChar !== null))
+            {
+                $items[] = $char === '%' ? null : false;
+            }
+            else
+            {
+                $items[] = $char;
+            }
+        }
+
+        $leading = false;
+        $trailing = false;
+
+        while ($items !== [] && $items[0] === null)
+        {
+            $leading = true;
+            array_shift($items);
+        }
+
+        while ($items !== [] && end($items) === null)
+        {
+            $trailing = true;
+            array_pop($items);
+        }
+
+        $literal = '';
+
+        foreach ($items as $item)
+        {
+            if (!is_string($item))
+            {
+                return null;
+            }
+
+            $literal .= $item;
+        }
+
+        return ['leading' => $leading, 'trailing' => $trailing, 'literal' => $literal];
+    }
+
+
+    /**
+     * Sestaví intervals query hledající text jako posloupnost termů, jejíž poslední term
+     * může pokračovat (prefix). Text analyzuje Elasticsearch analyzérem pole.
+     * @param bool $anchored musí posloupnost začínat prvním termem hodnoty?
+     * @return array<string, mixed>|null
+     */
+    private static function buildIntervalsQuery(string $field, string $text, bool $anchored): ?array
+    {
+        $complete = trim($text);
+        $prefix = '';
+
+        // Text končící mezerou má poslední slovo celé, jinak je poslední slovo jen začátkem termu.
+        if (preg_match('/\s$/u', $text) !== 1)
+        {
+            // Interpunkci na konci (`Ing.`) tokenizér zahodí, prefix by ji nenašel.
+            $core = (string) preg_replace('/[^\p{L}\p{N}]+$/u', '', $complete);
+
+            // Poslední term: písmena a číslice, uvnitř i tečka nebo apostrof (`s.r`, `1.5`, `O'Neil`),
+            // tak jako ho vytvoří standardní tokenizér. Na ostatních znacích (např. pomlčce) se term dělí.
+            if (preg_match('/[\p{L}\p{N}]+(?:[.\'][\p{L}\p{N}]+)*$/u', $core, $matches) === 1)
+            {
+                $prefix = $matches[0];
+                $complete = substr($core, 0, strlen($core) - strlen($prefix));
+            }
+        }
+
+        $rules = [];
+
+        if (preg_match('/[\p{L}\p{N}]/u', $complete) === 1)
+        {
+            $rules[] = ['match' => ['query' => trim($complete), 'ordered' => true, 'max_gaps' => 0]];
+        }
+
+        if ($prefix !== '')
+        {
+            $rules[] = ['prefix' => ['prefix' => $prefix]];
+        }
+
+        if ($rules === [])
+        {
+            return null;
+        }
+
+        $allOf = ['intervals' => $rules, 'ordered' => true, 'max_gaps' => 0];
+
+        if ($anchored)
+        {
+            $allOf['filter'] = ['script' => ['source' => 'interval.start == 0']];
+        }
+
+        return ['intervals' => [$field => ['all_of' => $allOf]]];
     }
 
 

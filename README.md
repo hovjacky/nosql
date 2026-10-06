@@ -99,6 +99,20 @@ Conditions accept operators =, !=, >, <, >=, <=, LIKE, IS NULL, IS NOT NULL, CRO
     + LIKE - the value should contain % (the same as in SQL). `_` matches a single
     character only with an `ESCAPE 'x'` clause. `*`, `?` and `\` are not wildcards
     in SQL LIKE, so they are escaped and match themselves.
+    By default LIKE becomes a `wildcard` query. On an analyzed `text` field that compares the
+    pattern with single words (terms), not with the whole value. Call
+    `$client->enableFieldTypeDetection()` to translate LIKE by the field type from the index
+    mapping (the mapping is loaded once per index):
+        - `text` field: `abc%` (starts with) and a multi-word `%ab cd%` (contains) become an
+        `intervals` query - a sequence of terms whose last term may continue, for "starts with"
+        anchored to the first term of the value. A single-word `%abc%` stays a wildcard
+        ("some word contains"). Equality, "ends with" and other patterns cannot be translated
+        correctly on a `text` field (the index does not know the length of the value) and stay
+        a wildcard as before.
+        - `keyword` field: the value is not passed through the wildcard value filter nor
+        lowercased, the wildcard is `case_insensitive`.
+        - other or unknown fields: unchanged.
+    `getFieldType($index, $field)` returns the type of a field.
     + = - the value can be a list, e.g. `['id = ?' => [[1, 3, 7]]]` (`id IN (1, 3, 7)`).
     The outer array holds one value per `?`, the inner one is the list itself - `['id = ?' => [1, 3, 7]]`
     would be three values for a single `?` and throws.

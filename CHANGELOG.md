@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+Unreleased
+----------
+
+### Added
+
++ `enableFieldTypeDetection()` - LIKE conditions are translated by the field type from the
+index mapping. On `text` fields "starts with" (`abc%`) is anchored to the first term of the
+value and a multi-word "contains" (`%ab cd%`) searches a sequence of terms, both through an
+`intervals` query; a plain wildcard matched single words, so "starts with Jiří" found
+"Ing. Jiří Rašner" and "contains Jiří Ra" found nothing. On `keyword` fields the value is
+no longer passed through the wildcard value filter nor lowercased and the wildcard is
+case-insensitive. Off by default.
++ `getFieldType()` returns the type of a field in the index mapping (with the detection on).
+
+
 5.0.0 - 2026-08-26
 ----------
 

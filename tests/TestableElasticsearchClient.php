@@ -58,6 +58,24 @@ final class TestableElasticsearchClient extends ElasticsearchClient
     /** @var array<string, mixed>|null poslední odeslaný dotaz */
     public ?array $lastRequest = null;
 
+    /** @var array<string, string> typy polí, které klient „načte“ z mapování indexu */
+    public array $fakeFieldTypes = [];
+
+    /** Kolikrát klient načítal mapování indexu. */
+    public int $fetchFieldTypesCount = 0;
+
+
+    /**
+     * Mapování se podstrčí místo dotazu do Elasticsearch.
+     * @return array<string, string>
+     */
+    protected function fetchFieldTypes(string $tableName): array
+    {
+        $this->fetchFieldTypesCount++;
+
+        return $this->fakeFieldTypes;
+    }
+
 
     /**
      * Odpověď se podstrčí až na hranici odesílání, aby se dotaz opravdu sestavil

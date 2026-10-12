@@ -3,82 +3,68 @@
 namespace Hovjacky\NoSQL;
 
 use DateTimeInterface;
-use Tracy\Debugger;
+use Hovjacky\NoSQL\Query\Parser\Ast\AndNode;
+use Hovjacky\NoSQL\Query\Parser\Ast\ComparisonNode;
+use Hovjacky\NoSQL\Query\Parser\Ast\Node;
+use Hovjacky\NoSQL\Query\Parser\Ast\OrNode;
+use Hovjacky\NoSQL\Query\Parser\ConditionParser;
+use Hovjacky\NoSQL\Query\Parser\Tokenizer;
 
-/**
- * Class DBWithBooleanParsing
- * @package Hovjacky\NoSQL
- */
 abstract class DBWithBooleanParsing extends DB
 {
     /**
-     * Vloží hodnoty do dotazu místo `?`.
-     * @param string $condition
+     * Nahradí `?` v podmínce zástupnými značkami a skutečné hodnoty odloží bokem.
+     *
+     * Hodnoty se do textu dotazu nevkládají vůbec. Text tak obsahuje jen to, co napsal
+     * vývojář, a hodnota nemůže rozbít parsování ani kdyby obsahovala `AND`, závorku
+     * nebo apostrof. Zároveň se nemusí nijak ořezávat a zachovává si původní typ.
+     *
      * @param mixed[]|null $values Seznam hodnot.
-     * @param bool $putPlaceholdersForDate Mají se místo datumu vložit placeholdery? Nutné např. pro MongoDB.
-     * @param array<string, mixed> $placeholders Pole pro uložení placeholderů a k nim patřícím datumům.
-     * @return string
+     * @param array<string, mixed> $boundValues Sem se uloží značka -> hodnota.
      * @throws DBException
      */
-    protected function putValuesIntoQuery(
-        string $condition,
-        ?array $values,
-        bool $putPlaceholdersForDate = false,
-        array &$placeholders = [],
-    ): string
+    protected function putValuesIntoQuery(string $condition, ?array $values, array &$boundValues): string
     {
-        $placeholdersCount = count($placeholders);
+        $index = count($boundValues);
 
-        if (isset($values))
+        // Značky si generujeme sami, v zadané podmínce nemají co dělat - text napsaný
+        // vývojářem by se jinak mohl vydávat za hodnotu. Bez hodnot žádné značky
+        // nevznikají, takže tam není co zaměnit a kontrolovat se nemusí.
+        if ($index === 0 && !empty($values) && preg_match('/#\d+#/', $condition) === 1)
         {
-            $from = '/' . preg_quote('?', '/') . '/';
+            throw new DBException(self::ERROR_BOOLEAN_RESERVED_SEQUENCE);
+        }
 
-            foreach ($values as $value)
+        foreach ($values ?? [] as $value)
+        {
+            if (!str_contains($condition, '?'))
             {
-                if (!str_contains($condition, '?'))
-                {
-                    Debugger::log('Too few questionmarks. Condition and values: ', Debugger::ERROR);
-                    Debugger::log($condition, Debugger::ERROR);
-                    Debugger::log($values, Debugger::ERROR);
+                $this->logError('Too few questionmarks in condition.', [
+                    'condition' => $condition,
+                    'values' => $values,
+                ]);
 
-                    throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
-                }
-
-                // Hodnotou může být i pole hodnot, převedeme jej do textové podoby
-                if (is_array($value))
-                {
-                    $replace = '[' . implode(',', $value) . ']';
-                }
-                elseif (is_scalar($value))
-                {
-                    $replace = (string) $value;
-                }
-
-                if ($putPlaceholdersForDate && $value instanceof DateTimeInterface)
-                {
-                    // Místo data dáme placeholder a datum uložíme do pole $placeholders
-                    $replace = '#' . $placeholdersCount++ . '#';
-                    $placeholders[$replace] = $value;
-                }
-
-                if (!isset($replace) || !is_string($replace))
-                {
-                    throw new DBException('Hodnota filtru musí být převeditelná na textový řetězec');
-                }
-
-                // Závorky nejsou v hodnotách povoleny, odstraníme je...
-                /** @var string $replace */
-                $replace = preg_replace('/[^\p{L}\p{N}\-_@., :\+\[\]%]/u', '', $replace);
-
-                $condition = (string) preg_replace($from, $replace, $condition, 1);
+                throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
             }
+
+            if (!is_scalar($value) && !is_array($value) && !$value instanceof DateTimeInterface)
+            {
+                throw new DBException('Hodnotou filtru nemůže být ' . get_debug_type($value) . '.');
+            }
+
+            $token = self::valueToken($index++);
+            $boundValues[$token] = $value;
+
+            // Nahrazujeme značkou, ne hodnotou, takže se v ní nemůže nic interpretovat.
+            $condition = (string) preg_replace('/\?/', $token, $condition, 1);
         }
 
         if (str_contains($condition, '?'))
         {
-            Debugger::log('Too many questionmarks. Condition and values:', Debugger::ERROR);
-            Debugger::log($condition, Debugger::ERROR);
-            Debugger::log($values, Debugger::ERROR);
+            $this->logError('Too many questionmarks in condition.', [
+                'condition' => $condition,
+                'values' => $values,
+            ]);
 
             throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PLACEHOLDERS);
         }
@@ -88,192 +74,80 @@ abstract class DBWithBooleanParsing extends DB
 
 
     /**
-     * Rozparsuje booleovský dotaz pro Elasticsearch.
-     * @param string $query
+     * Značka zastupující hodnotu v textu podmínky.
+     */
+    protected static function valueToken(int $index): string
+    {
+        return '#' . $index . '#';
+    }
+
+
+    /**
+     * Je tenhle text značkou zastupující hodnotu?
+     */
+    protected static function isValueToken(string $text): bool
+    {
+        return preg_match('/^#\d+#$/', $text) === 1;
+    }
+
+
+    /**
+     * Rozparsuje booleovskou where podmínku a přeloží ji na dotaz konkrétní databáze.
      * @return array<string, mixed>
      * @throws DBException
      */
     protected function parseBooleanQuery(string $query): array
     {
-        $parNumber = substr_count($query, '(');
-
-        if ($parNumber !== substr_count($query, ')'))
-        {
-            throw new DBException(self::ERROR_BOOLEAN_WRONG_NUMBER_OF_PARENTHESES);
-        }
-
-        if ($parNumber === 0)
-        {
-            return $this->parseAndOrQuery($query);
-        }
-
-        $elements = [];
-
-        $pos = strpos($query, '(');
-
-        while ($pos !== false)
-        {
-            // Něco je před závorkou
-            if ($pos > 0)
-            {
-                $temp = $this->trimAndOr(trim(substr($query, 0, $pos)));
-
-                /** @noinspection SlowArrayOperationsInLoopInspection */
-                $elements = array_merge($elements, $temp);
-            }
-
-            $query = trim(substr($query, $pos + 1));
-
-            // Zjistíme další pozici otevírací závorky a pozici uzavírací závorky
-            $posOpen = strpos($query, '(');
-            $posClose = strpos($query, ')');
-
-            // Pozice hledané uzavírací závorky
-            $queryPosClose = $posClose;
-
-            $subQuery = $query;
-            $openCount = 1;
-
-            // Hledáme pozici uzavírací závorky, která uzavře původně nalezenou otevírací závorku ($pos)
-            while ($openCount > 0)
-            {
-                if ($posOpen !== false && $posOpen < $posClose)
-                {
-                    $subQuery = (substr($subQuery, $posOpen + 1));
-                    $posClose -= $posOpen + 1;
-                    $posOpen = strpos($subQuery, '(');
-                    $openCount++;
-                }
-                else
-                {
-                    $subQuery = (substr($subQuery, $posClose + 1));
-
-                    if ($posOpen !== false)
-                    {
-                        $posOpen -= $posClose + 1;
-                    }
-
-                    $posClose = strpos($subQuery, ')');
-                    $openCount--;
-
-                    if ($openCount > 0)
-                    {
-                        $queryPosClose += $posClose + 1;
-                    }
-                }
-            }
-
-            $temp = $this->trimAndOr(trim(substr($query, 0, (int) $queryPosClose)));
-
-            /** @noinspection SlowArrayOperationsInLoopInspection */
-            $elements = array_merge($elements, $temp);
-
-            // Pokud je to vše skončíme
-            if ($posClose + 1 >= mb_strlen($query))
-            {
-                break;
-            }
-
-            // Jinak najdeme další pozici otevírací závorky nebo jen zbytek zpracujeme, pokud už další závorka není
-            $query = trim($subQuery);
-            $pos = strpos($query, '(');
-
-            if ($pos === false && mb_strlen($query) > 0)
-            {
-                $temp = $this->trimAndOr(trim($query));
-
-                /** @noinspection SlowArrayOperationsInLoopInspection */
-                $elements = array_merge($elements, $temp);
-            }
-        }
-
-        $result = [];
-        $iOld = 0;
-
-        for ($i = 1, $iMax = count($elements); $i < $iMax; $i += 2)
-        {
-            // Rozdělíme podle OR
-            if ($elements[$i] === 'OR')
-            {
-                $this->addOrClause($result, $this->parseAndArrayQuery($elements, $iOld, $i));
-            }
-        }
-
-        // A zpracujeme poslední část. Pokud je $result prázdný, je zbytečné tam dávat ['bool']['should'] (podobně v jiných případech)
-        if (empty($result))
-        {
-            return $this->parseAndArrayQuery($elements, $iOld, count($elements));
-        }
-
-        $this->addOrClause($result, $this->parseAndArrayQuery($elements, $iOld, count($elements)));
-
-        return $result;
+        return $this->compileNode(ConditionParser::parse(Tokenizer::tokenize($query)));
     }
 
 
     /**
-     * Rozdělí dotaz na 2 části, pokud začíná nebo končí AND/OR.
-     * @param string $query
-     * @return string[]
-     */
-    protected function trimAndOr(string $query): array
-    {
-        $result = [];
-        $first = $query;
-        $second = null;
-
-        if (str_starts_with($query, 'AND') || str_starts_with($query, 'OR'))
-        {
-            $first = trim(substr($query, 0, 3));
-            $second = trim(substr($query, 3));
-        }
-        elseif (strpos($query, 'AND') === mb_strlen($query) - 3 || strpos($query, 'OR') === mb_strlen($query) - 2)
-        {
-            $first = trim(substr($query, 0, mb_strlen($query) - 3));
-            $second = trim(substr($query, mb_strlen($query) - 3));
-        }
-
-        if (!empty($first))
-        {
-            $result[] = $first;
-        }
-
-        if (!empty($second))
-        {
-            $result[] = $second;
-        }
-
-        return $result;
-    }
-
-
-    /**
-     * 'Rozparsuje' pole, každý sudý prvek je AND, každý lichý je dál parsován.
-     * @param string[] $elements
-     * @param int $start
-     * @param int $end
-     * @return string[]
+     * Přeloží uzel stromu na dotaz. AND/OR se skládají přes addAndClause()/addOrClause(),
+     * jednotlivé výrazy rozebírá parseExpression().
+     * @return array<string, mixed>
      * @throws DBException
      */
-    protected function parseAndArrayQuery(array $elements, int &$start, int $end): array
+    private function compileNode(Node $node): array
     {
-        $andResult = [];
-
-        if ($start + 2 >= $end)
+        if ($node instanceof ComparisonNode)
         {
-            $andResult = $this->parseBooleanQuery($elements[$start]);
+            return $this->parseExpression($node->expression);
         }
-        else
+
+        $result = [];
+
+        if ($node instanceof AndNode)
         {
-            for ($j = $start; $j < $end; $j += 2)
+            foreach ($node->operands as $operand)
             {
-                $this->addAndClause($andResult, $this->parseBooleanQuery($elements[$j]));
+                $this->addAndClause($result, $this->compileNode($operand));
             }
+
+            return $result;
         }
 
-        $start = $end + 1;
+        if (!$node instanceof OrNode)
+        {
+            throw new DBException('Neznámý uzel podmínky: ' . $node::class);
+        }
 
-        return $andResult;
+        foreach ($node->operands as $operand)
+        {
+            $clause = $this->compileNode($operand);
+
+            // Viz OrNode::$wrapOperands - kvůli zachování tvaru (a tím i skóre) dotazu.
+            if ($node->wrapOperands && $operand instanceof ComparisonNode)
+            {
+                $wrapped = [];
+                $this->addAndClause($wrapped, $clause);
+                $clause = $wrapped;
+            }
+
+            $this->addOrClause($result, $clause);
+        }
+
+        return $result;
     }
 
 
@@ -293,14 +167,6 @@ abstract class DBWithBooleanParsing extends DB
      * @return void
      */
     abstract protected function addOrClause(array &$result, array $clause): void;
-
-
-    /**
-     * Rozparsuje booleovský výraz bez závorek (jen AND a OR).
-     * @param string $query
-     * @return array<string, mixed>
-     */
-    abstract protected function parseAndOrQuery(string $query): array;
 
 
     /**

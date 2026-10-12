@@ -1,29 +1,17 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Hovjacky\NoSQL;
 
 use Exception;
 use Throwable;
 
-/**
- * Class NotImplementedException
- * @package Hovjacky\NoSQL
- */
-class NotImplementedException extends Exception
+class NotImplementedException extends Exception implements NoSQLException
 {
-    /**
-     * NotImplementedException constructor.
-     * @param string $message
-     * @param int $code
-     * @param Throwable|null $previous
-     */
+    private const DEFAULT_MESSAGE = 'This feature has not yet been implemented.';
+
+
     public function __construct(string $message = '', int $code = 0, ?Throwable $previous = null)
     {
-        if (empty($message))
-        {
-            $message = 'This feature has not yet been implemented.';
-        }
-
-        parent::__construct($message, $code, $previous);
+        parent::__construct($message !== '' ? $message : self::DEFAULT_MESSAGE, $code, $previous);
     }
 }
